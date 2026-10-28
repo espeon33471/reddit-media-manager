@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Reddit Media Manager{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="panel">
+  <div class="row spread">
+    <div class="row">
+      <span id="engine-state"><span class="badge badge-stopped">…</span></span>
+    </div>
+    <div class="row">
+      <button id="btn-start" class="primary">Start</button>
+      <button id="btn-pause">Pauzeer</button>
+      <button id="btn-resume">Hervat</button>
+      <button id="btn-stop" class="danger">Stop</button>
+    </div>
+  </div>
+</div>
+
+<div class="stats" id="stats">
+  <div class="stat info"><div class="v" id="st-pending">…</div><div class="k">In wachtrij</div></div>
+  <div class="stat info"><div class="v" id="st-running">…</div><div class="k">Bezig</div></div>
+  <div class="stat ok"><div class="v" id="st-done">…</div><div class="k">Gedownload</div></div>
+  <div class="stat err"><div class="v" id="st-failed">…</div><div class="k">Mislukt</div></div>
+  <div class="stat"><div class="v" id="st-skipped">…</div><div class="k">Overgeslagen</div></div>
+  <div class="stat"><div class="v" id="st-speed">…</div><div class="k">Snelheid</div></div>
+</div>
+
+<h2>Recente fouten</h2>
+<div class="panel">
+  <ul class="errors-list" id="errors-list"><li class="small">Geen fouten gemeld.</li></ul>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function renderStatus(st) {
+    const c = st.counters || {};
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? 0; };
+    set("st-pending", c.pending); set("st-running", c.running);
+    set("st-done", c.done); set("st-failed", c.failed); set("st-skipped", c.skipped);
+    document.getElementById("st-speed").textContent =
+      (st.speed_bps > 0 ? RMM.fmtBytes(st.speed_bps) + "/s" : "0 B/s");
+    document.getElementById("engine-state").innerHTML = RMM.statusBadge(st.state);
+
+    const btns = {
+      "btn-start": st.state === "stopped",
+      "btn-pause": st.state === "running",
+      "btn-resume": st.state === "paused",
+      "btn-stop": st.state !== "stopped",
+    };
+    for (const [id, enabled] of Object.entries(btns)) {
+      const b = document.getElementById(id);
+      if (b) b.disabled = !enabled;
+    }
+
+    const list = document.getElementById("errors-list");
+    const errs = st.recent_errors || [];
+    if (!errs.length) {
+      list.innerHTML = '<li class="small">Geen fouten gemeld.</li>';
+    } else {
+      list.innerHTML = errs.map(e =>
+        `<li><span class="at">${RMM.esc(e.at)}</span>${RMM.esc(e.msg)}</li>`).join("");
+    }
+  }
+  window.RMM_onStatus = renderStatus;
+  RMM.startEngineBadgePoll();
+
+  async function engine(action) {
+    try {
+      await RMM.api("/api/engine/" + action, { method: "POST" });
+      RMM.toast("Engine: " + action);
+      renderStatus(await RMM.api("/api/status"));
+    } catch (e) { RMM.toast(e.message, "err"); }
+  }
+  document.getElementById("btn-start").onclick = () => engine("start");
+  document.getElementById("btn-pause").onclick = () => engine("pause");
+  document.getElementById("btn-resume").onclick = () => engine("resume");
+  document.getElementById("btn-stop").onclick = () => engine("stop");
+</script>
+{% endblock %}

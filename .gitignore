@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime-data (blijft in het Docker-volume, hoort niet in de repo)
+state.db
+state.db-*
+app.log
+data/
+downloads/
+
+# OS-artefacten
+.DS_Store
+Thumbs.db
+nul

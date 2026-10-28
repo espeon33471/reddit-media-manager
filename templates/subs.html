@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}Subreddits · Reddit Media Manager{% endblock %}
+{% block content %}
+<h1>Subreddits</h1>
+
+<div class="panel">
+  <h2 style="margin-top:0">Bulk-import</h2>
+  <div class="grid2">
+    <div>
+      <label class="field">
+        <span class="lbl">Eén subreddit per regel, of komma-gescheiden</span>
+        <textarea id="import-text" placeholder="aww&#10;EarthPorn&#10;Programming, MechanicalGulls"></textarea>
+      </label>
+      <div class="row">
+        <button id="import-btn" class="primary">Importeer</button>
+        <span class="small" id="import-result"></span>
+      </div>
+    </div>
+    <div>
+      <label class="field">
+        <span class="lbl">…of een tekstbestand uploaden (.txt, .csv)</span>
+        <input type="file" id="import-file" accept=".txt,.csv,.list,text/plain">
+      </label>
+      <div class="row">
+        <button id="import-file-btn">Upload &amp; importeer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>Configuratie</h2>
+<div class="panel" style="padding:0.4rem 0">
+  <table id="subs-table">
+    <thead>
+      <tr>
+        <th class="checkbox-cell"></th>
+        <th>Subreddit</th>
+        <th>Max posts <span class="small">(0 = alles)</span></th>
+        <th>Voorbij datum</th>
+        <th>Sorteer</th>
+        <th class="num">Bestanden</th>
+        <th>Laatste sync</th>
+        <th>Acties</th>
+      </tr>
+    </thead>
+    <tbody id="subs-body"><tr><td colspan="8" class="small">Subreddits laden…</td></tr></tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadSubs() {
+    try {
+      const { subs } = await RMM.api("/api/subs");
+      const body = document.getElementById("subs-body");
+      if (!subs.length) {
+        body.innerHTML = '<tr><td colspan="8" class="small">Nog geen subreddits. Importeer er hierboven.</td></tr>';
+        return;
+      }
+      body.innerHTML = subs.map(s => `
+        <tr data-sub="${RMM.esc(s.sub)}">
+          <td class="checkbox-cell"><input type="checkbox" class="f-enabled" ${s.enabled ? "checked" : ""}></td>
+          <td><strong>r/</strong>${RMM.esc(s.sub)}</td>
+          <td><input type="number" min="0" class="f-max" style="width:90px" value="${s.max_posts ?? 0}"></td>
+          <td><input type="date" class="f-date" value="${s.date_from || ""}"></td>
+          <td><select class="f-sort">
+            ${["new","top","hot"].map(o => `<option value="${o}" ${s.sort === o ? "selected" : ""}>${o}</option>`).join("")}
+          </select></td>
+          <td class="num">${s.done_count ?? 0} / ${s.file_count ?? 0}</td>
+          <td class="small">${s.last_synced_at ? RMM.fmtDate(s.last_synced_at) : "—"}</td>
+          <td class="row" style="gap:0.35rem">
+            <button class="small b-save">Opslaan</button>
+            <button class="small b-sync primary" title="Nieuwe posts sinds de laatste sync scannen, in de wachtrij zetten én downloaden">Sync</button>
+            <button class="small b-resync" title="Hele subreddit opnieuw scannen: ook posts die al eerder gezien zijn (bijv. na een filterverandering)">Resync</button>
+            <button class="small b-redl" title="Alles wat al gedownload is van deze subreddit opnieuw downloaden (bestanden worden overschreven)">Her-download</button>
+            <button class="small b-del danger" title="Verwijder sub uit lijst">✕</button>
+          </td>
+        </tr>`).join("");
+
+      body.querySelectorAll("tr[data-sub]").forEach(tr => {
+        const sub = tr.dataset.sub;
+        const readCfg = () => ({
+          enabled: tr.querySelector(".f-enabled").checked,
+          max_posts: parseInt(tr.querySelector(".f-max").value || "0", 10),
+          date_from: tr.querySelector(".f-date").value,
+          sort: tr.querySelector(".f-sort").value
+        });
+        tr.querySelector(".b-save").onclick = async () => {
+          try {
+            await RMM.api(`/api/subs/${encodeURIComponent(sub)}/config`,
+              { method: "POST", body: JSON.stringify(readCfg()) });
+            RMM.toast(`Configuratie r/${sub} opgeslagen`);
+          } catch (e) { RMM.toast(e.message, "err"); }
+        };
+        tr.querySelector(".b-sync").onclick = () => doSync(sub, "new", true, "Nieuwe posts in wachtrij + download gestart");
+        tr.querySelector(".b-resync").onclick = () => doSync(sub, "all", true, "Volledige resync gestart (alle posts)");
+        tr.querySelector(".b-redl").onclick = async () => {
+          if (!confirm(`Alles van r/${sub} wat al gedownload is, opnieuw downloaden?\nBestaande bestanden worden overschreven.`)) return;
+          try {
+            const r = await RMM.api("/api/queue/redownload", { method: "POST", body: JSON.stringify({ sub }) });
+            RMM.toast(`Her-download gestart: ${r.count} items (r/${sub})`);
+          } catch (e) { RMM.toast(e.message, "err"); }
+        };
+        tr.querySelector(".b-del").onclick = async () => {
+          if (!confirm(`r/${sub} uit de subreddit-lijst verwijderen?\n(Downloads en bestanden blijven staan.)`)) return;
+          try {
+            await RMM.api(`/api/subs/${encodeURIComponent(sub)}`, { method: "DELETE" });
+            RMM.toast(`r/${sub} verwijderd`);
+            loadSubs();
+          } catch (e) { RMM.toast(e.message, "err"); }
+        };
+      });
+    } catch (e) {
+      document.getElementById("subs-body").innerHTML =
+        `<tr><td colspan="8" class="small">Fout: ${RMM.esc(e.message)}</td></tr>`;
+    }
+  }
+
+  async function doSync(sub, mode, start, okMsg) {
+    try {
+      const res = await RMM.api(`/api/subs/${encodeURIComponent(sub)}/sync`,
+        { method: "POST", body: JSON.stringify({ mode, start }) });
+      RMM.toast(`${okMsg} — ${res.files_enqueued} bestanden in queue (r/${sub})`);
+      loadSubs();
+    } catch (e) { RMM.toast(e.message, "err", 8000); }
+  }
+
+  async function importText() {
+    const btn = document.getElementById("import-btn");
+    const out = document.getElementById("import-result");
+    btn.disabled = true; out.textContent = "Bezig…";
+    try {
+      const res = await RMM.api("/api/subs/import", {
+        method: "POST",
+        body: JSON.stringify({ text: document.getElementById("import-text").value })
+      });
+      out.textContent = `${res.added} toegevoegd, ${res.existing} al aanwezig`;
+      RMM.toast("Importeerde " + res.added + " subreddits");
+      document.getElementById("import-text").value = "";
+      loadSubs();
+    } catch (e) { out.textContent = ""; RMM.toast(e.message, "err"); }
+    btn.disabled = false;
+  }
+
+  async function importFile() {
+    const input = document.getElementById("import-file");
+    const btn = document.getElementById("import-file-btn");
+    if (!input.files.length) { RMM.toast("Kies eerst een bestand", "err"); return; }
+    btn.disabled = true;
+    const fd = new FormData();
+    fd.append("file", input.files[0]);
+    try {
+      const res = await fetch("/api/subs/import/file", { method: "POST", body: fd });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      const data = await res.json();
+      RMM.toast(`Bestand geïmporteerd: ${data.added} nieuw, ${data.existing} al aanwezig`);
+      input.value = "";
+      loadSubs();
+    } catch (e) { RMM.toast(e.message, "err"); }
+    btn.disabled = false;
+  }
+
+  document.getElementById("import-btn").onclick = importText;
+  document.getElementById("import-file-btn").onclick = importFile;
+  loadSubs();
+  RMM.startEngineBadgePoll();
+</script>
+{% endblock %}

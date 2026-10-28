@@ -1,0 +1,19 @@
+# Runtime-artefacten van de host: nooit mee in de image (data zit in het volume).
+__pycache__/
+*.py[cod]
+.git/
+.gitignore
+.venv/
+venv/
+state.db
+state.db-*
+downloads/
+app.log
+app.log.*
+*.log
+.DS_Store
+Thumbs.db
+# Docker bestanden zelf hoeven niet in de image
+Dockerfile
+.dockerignore
+docker-compose.yml

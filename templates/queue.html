@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Queue · Reddit Media Manager{% endblock %}
+{% block content %}
+<h1>Queue</h1>
+
+<div class="panel">
+  <div class="row spread">
+    <span id="engine-state"><span class="badge badge-stopped">…</span></span>
+    <div class="row">
+      <button id="btn-start" class="primary">Start</button>
+      <button id="btn-pause">Pauzeer</button>
+      <button id="btn-resume">Hervat</button>
+      <button id="btn-stop" class="danger">Stop</button>
+      <button id="refresh" class="small">↻ Vernieuw</button>
+    </div>
+  </div>
+</div>
+
+<div class="panel" style="padding:0.4rem 0">
+  <table id="queue-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Sub</th>
+        <th>Post</th>
+        <th>URL</th>
+        <th>Status</th>
+        <th class="num">Voortgang</th>
+        <th class="num">Pogingen</th>
+        <th>Fout / opmerking</th>
+        <th>Acties</th>
+      </tr>
+    </thead>
+    <tbody id="queue-body"><tr><td colspan="9" class="small">Laden…</td></tr></tbody>
+  </table>
+</div>
+<p class="small">Toont de 500 meest recente items. Pauze onderbreekt ook lopende downloads; resume gaat verder waar het stopte.</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadQueue() {
+    try {
+      const { items } = await RMM.api("/api/queue?limit=500");
+      const body = document.getElementById("queue-body");
+      if (!items.length) {
+        body.innerHTML = '<tr><td colspan="9" class="small">Wachtrij is leeg.</td></tr>';
+        return;
+      }
+      body.innerHTML = items.map(it => {
+        const retryable = it.status === "failed" || it.status === "skipped";
+        return `
+        <tr>
+          <td class="mono small">${it.id}</td>
+          <td>r/${RMM.esc(it.sub)}</td>
+          <td class="mono small">${RMM.esc(it.post_id)}</td>
+          <td class="mono small clamp" title="${RMM.esc(it.url)}">${RMM.esc(it.url || "—")}</td>
+          <td><span class="badge s-${it.status}">${it.status}</span></td>
+          <td class="num small">${it.bytes_done > 0 ? RMM.fmtBytes(it.bytes_done) : "—"}</td>
+          <td class="num">${it.attempts ?? 0}</td>
+          <td class="small clamp" title="${RMM.esc(it.error)}">${RMM.esc(it.error || "")}</td>
+          <td>${retryable ? `<button class="small b-retry" data-id="${it.id}">Opnieuw</button>` : (it.status === "done" ? "✓" : "")}</td>
+        </tr>`;
+      }).join("");
+      body.querySelectorAll(".b-retry").forEach(b => {
+        b.onclick = async () => {
+          try {
+            await RMM.api(`/api/queue/${b.dataset.id}/retry`, { method: "POST" });
+            RMM.toast("Item opnieuw in wachtrij");
+            loadQueue();
+          } catch (e) { RMM.toast(e.message, "err"); }
+        };
+      });
+    } catch (e) {
+      document.getElementById("queue-body").innerHTML =
+        `<tr><td colspan="9" class="small">Fout: ${RMM.esc(e.message)}</td></tr>`;
+    }
+  }
+
+  function renderStatus(st) {
+    document.getElementById("engine-state").innerHTML = RMM.statusBadge(st.state);
+    const btns = {
+      "btn-start": st.state === "stopped",
+      "btn-pause": st.state === "running",
+      "btn-resume": st.state === "paused",
+      "btn-stop": st.state !== "stopped",
+    };
+    for (const [id, enabled] of Object.entries(btns)) {
+      const b = document.getElementById(id);
+      if (b) b.disabled = !enabled;
+    }
+  }
+  window.RMM_onStatus = renderStatus;
+
+  async function engine(action) {
+    try {
+      await RMM.api("/api/engine/" + action, { method: "POST" });
+      renderStatus(await RMM.api("/api/status"));
+    } catch (e) { RMM.toast(e.message, "err"); }
+  }
+  RMM.sortableTable("queue-table", [8]);
+  document.getElementById("btn-start").onclick = () => engine("start");
+  document.getElementById("btn-pause").onclick = () => engine("pause");
+  document.getElementById("btn-resume").onclick = () => engine("resume");
+  document.getElementById("btn-stop").onclick = () => engine("stop");
+  document.getElementById("refresh").onclick = loadQueue;
+
+  loadQueue();
+  setInterval(loadQueue, 3000);
+  RMM.startEngineBadgePoll();
+</script>
+{% endblock %}

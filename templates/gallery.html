@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% block title %}Galerij · Reddit Media Manager{% endblock %}
+{% block content %}
+<h1>Galerij</h1>
+
+<div class="panel">
+  <div class="row spread" style="flex-wrap:wrap;gap:8px">
+    <div class="row" style="gap:6px">
+      <label class="small" style="margin:0">Subreddit:</label>
+      <select id="gal-filter-sub" style="min-width:160px">
+        <option value="">Alle</option>
+      </select>
+      <label class="small" style="margin:0">Type:</label>
+      <select id="gal-filter-type" style="min-width:110px">
+        <option value="">Alle</option>
+        <option value="photo">Foto's</option>
+        <option value="video">Video's</option>
+        <option value="gif">GIFs</option>
+      </select>
+    </div>
+    <span id="gal-count" class="small">…</span>
+  </div>
+</div>
+
+<div id="gallery-grid" class="gallery-grid">
+  <div class="gallery-empty">Laad galerij…</div>
+</div>
+
+<div class="row" style="margin-top:1rem;justify-content:center">
+  <button id="gal-loadmore" class="primary" hidden>Meer laden</button>
+</div>
+
+<!-- Lightbox modal -->
+<div id="lightbox" class="lightbox hidden">
+  <div class="lightbox-backdrop"></div>
+  <div class="lightbox-content">
+    <button id="lightbox-close" class="lightbox-close">&times;</button>
+    <div id="lightbox-body"></div>
+    <div id="lightbox-info" class="small" style="margin-top:8px;text-align:center"></div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.7rem;
+    margin-bottom: 1rem;
+  }
+  .gallery-item {
+    position: relative;
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.15s, border-color 0.15s;
+  }
+  .gallery-item:hover {
+    transform: scale(1.03);
+    border-color: var(--accent-soft);
+  }
+  .gallery-item img,
+  .gallery-item video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .gallery-item .g-badge {
+    position: absolute;
+    bottom: 6px;
+    left: 6px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    background: rgba(0,0,0,0.65);
+    color: #fff;
+    padding: 0.15rem 0.5rem;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .gallery-item .g-sub {
+    position: absolute;
+    bottom: 6px;
+    right: 6px;
+    font-size: 0.68rem;
+    color: #ccc;
+    background: rgba(0,0,0,0.5);
+    padding: 0.1rem 0.4rem;
+    border-radius: 5px;
+  }
+  .gallery-empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--muted);
+    font-size: 1rem;
+  }
+
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .lightbox.hidden { display: none; }
+  .lightbox-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+  }
+  .lightbox-content {
+    position: relative;
+    max-width: 90vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .lightbox-content img,
+  .lightbox-content video {
+    max-width: 90vw;
+    max-height: 80vh;
+    border-radius: 8px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+  }
+  .lightbox-close {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    width: 2.2rem;
+    height: 2.2rem;
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  .lightbox-close:hover { border-color: var(--err); color: var(--err); }
+</style>
+
+<script>
+"use strict";
+const PAGE_SIZE = 60;
+let offset = 0;
+let total = 0;
+
+async function loadGallery(reset = false) {
+  if (reset) offset = 0;
+  const sub = document.getElementById("gal-filter-sub").value;
+  const type = document.getElementById("gal-filter-type").value;
+  const params = new URLSearchParams({ limit: PAGE_SIZE, offset });
+  if (sub) params.set("sub", sub);
+  if (type) params.set("type", type);
+
+  try {
+    const data = await RMM.api(`/api/media?${params}`);
+    total = data.total;
+    const items = data.items || [];
+
+    // Populate sub filter on first load
+    if (reset && data.subs) {
+      const sel = document.getElementById("gal-filter-sub");
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">Alle</option>';
+      for (const s of data.subs) {
+        sel.innerHTML += `<option value="${RMM.esc(s)}">${RMM.esc(s)}</option>`;
+      }
+      if (sub) sel.value = sub;
+    }
+
+    const grid = document.getElementById("gallery-grid");
+    if (reset) grid.innerHTML = "";
+
+    if (!items.length && reset) {
+      grid.innerHTML = '<div class="gallery-empty">Nog geen media gedownload. Start een sync via de dashboard-pagina.</div>';
+    }
+
+    for (const it of items) {
+      grid.appendChild(makeGalleryItem(it));
+    }
+
+    offset += items.length;
+    document.getElementById("gal-count").textContent =
+      `${Math.min(offset, total)} van ${total} bestanden`;
+    document.getElementById("gal-loadmore").hidden = offset >= total;
+  } catch (e) {
+    RMM.toast(e.message, "err");
+  }
+}
+
+function makeGalleryItem(it) {
+  const el = document.createElement("div");
+  el.className = "gallery-item";
+  const mediaUrl = `/media/${it.local_path}`;
+  const mtype = (it.media_type || "photo").toLowerCase();
+
+  if (mtype === "video") {
+    const vid = document.createElement("video");
+    vid.src = mediaUrl;
+    vid.muted = true;
+    vid.preload = "metadata";
+    vid.playsInline = true;
+    vid.addEventListener("mouseenter", () => vid.play().catch(() => {}));
+    vid.addEventListener("mouseleave", () => { vid.pause(); vid.currentTime = 0; });
+    el.appendChild(vid);
+  } else {
+    const img = document.createElement("img");
+    img.src = mediaUrl;
+    img.loading = "lazy";
+    img.alt = it.post_id;
+    el.appendChild(img);
+  }
+
+  const badge = document.createElement("span");
+  badge.className = "g-badge";
+  badge.textContent = mtype;
+  el.appendChild(badge);
+
+  const sub = document.createElement("span");
+  sub.className = "g-sub";
+  sub.textContent = it.sub;
+  el.appendChild(sub);
+
+  // Click → lightbox
+  el.addEventListener("click", () => openLightbox(it, mediaUrl, mtype));
+  return el;
+}
+
+function openLightbox(it, mediaUrl, mtype) {
+  const lb = document.getElementById("lightbox");
+  const body = document.getElementById("lightbox-body");
+  const info = document.getElementById("lightbox-info");
+  body.innerHTML = "";
+
+  if (mtype === "video") {
+    const vid = document.createElement("video");
+    vid.src = mediaUrl;
+    vid.controls = true;
+    vid.autoplay = true;
+    body.appendChild(vid);
+  } else {
+    const img = document.createElement("img");
+    img.src = mediaUrl;
+    img.alt = it.post_id;
+    body.appendChild(img);
+  }
+
+  const title = it.post_title ? RMM.esc(it.post_title) : "";
+  const author = it.post_author ? ` · u/${RMM.esc(it.post_author)}` : "";
+  info.innerHTML = (title ? `<div style="font-size:0.95rem;margin-bottom:2px">${title}</div>` : "") +
+    `<div>r/${RMM.esc(it.sub)}${author}${it.post_date ? " · " + it.post_date : ""} · ${RMM.fmtBytes(it.size || 0)}</div>`;
+  lb.classList.remove("hidden");
+}
+
+function closeLightbox() {
+  try {
+    document.getElementById("lightbox").classList.add("hidden");
+    const body = document.getElementById("lightbox-body");
+    // Stop video playback
+    body.querySelectorAll("video").forEach(v => { try { v.pause(); } catch (_) {} v.removeAttribute("src"); v.load(); });
+    body.innerHTML = "";
+    document.getElementById("lightbox-info").innerHTML = "";
+  } catch (e) {
+    // Zelfs bij een fout: modal uit de DOM halen zodat de UI nooit vastloopt
+    try { document.getElementById("lightbox").classList.add("hidden"); } catch (_) {}
+  }
+}
+
+document.getElementById("lightbox-close").onclick = closeLightbox;
+document.querySelector(".lightbox-backdrop").onclick = closeLightbox;
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeLightbox(); });
+
+document.getElementById("gal-loadmore").onclick = () => loadGallery(false);
+document.getElementById("gal-filter-sub").onchange = () => loadGallery(true);
+document.getElementById("gal-filter-type").onchange = () => loadGallery(true);
+
+loadGallery(true);
+</script>
+{% endblock %}

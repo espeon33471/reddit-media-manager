@@ -1,0 +1,14 @@
+services:
+  reddit-media-manager:
+    build: .
+    container_name: reddit-media-manager
+    ports:
+      - "8000:8000"          # links: lokale poort — wijzig bij conflict
+    environment:
+      - RMM_DATA=/data   # state.db, app.log én gedownloade media in het volume
+    volumes:
+      - rmm-data:/data
+    restart: unless-stopped
+
+volumes:
+  rmm-data:

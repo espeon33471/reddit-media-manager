@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}History · Reddit Media Manager{% endblock %}
+{% block content %}
+<h1>History</h1>
+
+<div class="panel">
+  <div class="row">
+    <input type="text" id="filter-sub" placeholder="Filter op subreddit (bijv. aww)">
+    <button id="filter-btn">Filter</button>
+    <button id="filter-clear" class="small">Wissen</button>
+  </div>
+  <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+    <button id="btn-migrate">Mapjes vlakken (migratie)</button>
+    <span class="small" id="migrate-note">Verplaatst bestanden uit per-post mapjes direct in de subreddit-map. Idempotent — opnieuw drukken kan geen kwaad.</span>
+  </div>
+</div>
+
+<!-- Dedup-paneel -->
+<div class="panel">
+  <div class="row spread" style="flex-wrap:wrap;gap:8px">
+    <div>
+      <strong>Duplicaten</strong>
+      <div class="small" id="dedup-summary">Identieke bestanden (zelfde SHA-256) die in meerdere posts/subreddits voorkomen.</div>
+    </div>
+    <button id="btn-dedup-find" class="primary">Duplicaten zoeken</button>
+  </div>
+  <div id="dedup-list" style="margin-top:12px"></div>
+</div>
+
+<div class="panel" style="padding:0.4rem 0">
+  <table id="history-table">
+    <thead>
+      <tr>
+        <th>Subreddit</th>
+        <th>Post</th>
+        <th>Datum</th>
+        <th class="num">Bestanden</th>
+        <th>Status</th>
+        <th>Acties</th>
+      </tr>
+    </thead>
+    <tbody id="history-body"><tr><td colspan="6" class="small">Laden…</td></tr></tbody>
+  </table>
+</div>
+<p class="small">Verwijderen uit history laat bestanden op disk staan die ook door andere posts worden gebruikt.</p>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .dedup-group {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: var(--panel-2);
+  }
+  .dedup-group .dg-head { font-weight: 600; margin-bottom: 6px; }
+  .dedup-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; flex-wrap: wrap; }
+  .dedup-row .path { font-family: monospace; font-size: 0.78rem; color: var(--muted); word-break: break-all; }
+</style>
+
+<script>
+  async function loadHistory() {
+    const sub = document.getElementById("filter-sub").value.trim();
+    const url = "/api/history" + (sub ? "?sub=" + encodeURIComponent(sub) : "");
+    try {
+      const { posts } = await RMM.api(url);
+      const body = document.getElementById("history-body");
+      if (!posts.length) {
+        body.innerHTML = '<tr><td colspan="6" class="small">Nog niets gedownload.</td></tr>';
+        return;
+      }
+      body.innerHTML = posts.map(p => {
+        const title = p.post_title ? RMM.esc(p.post_title) : "";
+        return `
+        <tr data-sub="${RMM.esc(p.sub)}" data-post="${RMM.esc(p.post_id)}">
+          <td><strong>r/</strong>${RMM.esc(p.sub)}</td>
+          <td class="small">
+            <div class="mono" style="font-size:0.75rem;color:var(--muted)">${RMM.esc(p.post_id)}</div>
+            ${title ? `<div class="clamp" title="${title}" style="max-width:340px">${title}</div>` : ""}
+          </td>
+          <td class="small">${p.post_date ? p.post_date.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") : "—"}</td>
+          <td class="num">${p.done}/${p.files}</td>
+          <td><span class="badge badge-${p.status === "in_progress" ? "running" : p.status}">${p.status === "in_progress" ? "bezig" : p.status}</span></td>
+          <td><button class="small b-del danger">Verwijder</button></td>
+        </tr>`;
+      }).join("");
+      body.querySelectorAll("tr[data-sub]").forEach(tr => {
+        tr.querySelector(".b-del").onclick = async () => {
+          if (!confirm(`History-entry r/${tr.dataset.sub}/${tr.dataset.post} verwijderen?`)) return;
+          try {
+            await RMM.api("/api/history/delete", {
+              method: "POST",
+              body: JSON.stringify({ sub: tr.dataset.sub, post_id: tr.dataset.post })
+            });
+            RMM.toast("History-entry verwijderd");
+            loadHistory();
+          } catch (e) { RMM.toast(e.message, "err"); }
+        };
+      });
+    } catch (e) {
+      document.getElementById("history-body").innerHTML =
+        `<tr><td colspan="6" class="small">Fout: ${RMM.esc(e.message)}</td></tr>`;
+    }
+  }
+
+  // ---- Migratie (vlakke structuur) ----
+  document.getElementById("btn-migrate").onclick = async () => {
+    if (!confirm("Bestanden uit per-post mapjes naar de subreddit-map verplaatsen?\nDit is veilig en kan opnieuw worden uitgevoerd.")) return;
+    const btn = document.getElementById("btn-migrate");
+    btn.disabled = true;
+    try {
+      const r = await RMM.api("/api/migrate/flatten", { method: "POST" });
+      RMM.toast(`Migratie klaar: ${r.moved} bestanden verplaatst, ${r.skipped} overgeslagen`);
+    } catch (e) {
+      RMM.toast("Migratie mislukt: " + e.message, "err");
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  // ---- Dedup ----
+  async function findDedup() {
+    const btn = document.getElementById("btn-dedup-find");
+    const list = document.getElementById("dedup-list");
+    const summary = document.getElementById("dedup-summary");
+    btn.disabled = true;
+    summary.textContent = "Zoeken…";
+    try {
+      const { groups, total_groups } = await RMM.api("/api/dedup/similar");
+      if (!groups.length) {
+        list.innerHTML = "";
+        summary.textContent = `Geen duplicaten gevonden. (${total_groups} groepen)`;
+        return;
+      }
+      summary.textContent = `${total_groups} groep(en) met duplicaten. "Behoud" is de oudste entry; op de andere kun je klikken om het duplicaat te verwijderen.`;
+      list.innerHTML = groups.map(g => {
+        const keep = g.keep || {};
+        const rows = (g.delete || []).map(d => `
+          <div class="dedup-row">
+            <div>
+              <div class="small"><strong>r/${RMM.esc(d.sub)}</strong> · ${RMM.esc(d.post_title || d.post_id)}</div>
+              <div class="path">${RMM.esc(d.local_path)}</div>
+            </div>
+            <button class="small b-dedup-del danger" data-id="${d.id}">Verwijder duplicaat</button>
+          </div>`).join("");
+        return `
+        <div class="dedup-group">
+          <div class="dg-head">${g.count}× identiek · SHA-256 ${RMM.esc(g.sha256)}…</div>
+          <div class="dedup-row" style="border-bottom:1px dashed var(--border);padding-bottom:6px">
+            <div>
+              <div class="small"><strong>r/${RMM.esc(keep.sub)}</strong> · ${RMM.esc(keep.post_title || keep.post_id)} <span class="badge s-done">behoud</span></div>
+              <div class="path">${RMM.esc(keep.local_path)}</div>
+            </div>
+          </div>
+          ${rows}
+        </div>`;
+      }).join("");
+      list.querySelectorAll(".b-dedup-del").forEach(b => {
+        b.onclick = async () => {
+          if (!confirm("Dit duplicaat (DB-entry + bestand, indien niet gedeeld) verwijderen?")) return;
+          try {
+            const r = await RMM.api("/api/dedup/delete", { method: "POST", body: JSON.stringify({ id: Number(b.dataset.id) }) });
+            RMM.toast(r.file_removed ? "Duplicaat + bestand verwijderd" : "DB-entry verwijderd (bestand gedeeld, op disk gelaten)");
+            findDedup();
+            loadHistory();
+          } catch (e) { RMM.toast("Verwijderen mislukt: " + e.message, "err"); }
+        };
+      });
+    } catch (e) {
+      summary.textContent = "Fout: " + e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  document.getElementById("btn-dedup-find").onclick = findDedup;
+
+  document.getElementById("filter-btn").onclick = loadHistory;
+  document.getElementById("filter-clear").onclick = () => {
+    document.getElementById("filter-sub").value = "";
+    loadHistory();
+  };
+  document.getElementById("filter-sub").addEventListener("keydown", e => {
+    if (e.key === "Enter") loadHistory();
+  });
+  RMM.sortableTable("history-table", [5]);
+  loadHistory();
+  RMM.startEngineBadgePoll();
+</script>
+{% endblock %}

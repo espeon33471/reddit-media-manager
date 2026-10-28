@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Settings · Reddit Media Manager{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<div class="grid2">
+  <div class="panel">
+    <h2 style="margin-top:0">Opslag</h2>
+    <label class="field">
+      <span class="lbl">Dataroot (map waar <span class="mono">&lt;subreddit&gt;/…</span> binnen komt; relatief = t.o.v. datamap, standaard: projectmap / in Docker <span class="mono">/data</span>)</span>
+      <input type="text" id="set-dataroot" placeholder="downloads">
+    </label>
+    <label class="field">
+      <span class="lbl">Aantal parallelle downloaders (1–16)</span>
+      <input type="number" id="set-concurrency" min="1" max="16" placeholder="4">
+    </label>
+    <label class="field">
+      <span class="lbl">Min. seconde(n) tussen Reddit-API-aanroepen (~10/min = 6.0)</span>
+      <input type="number" id="set-request_interval" min="0.5" max="60" step="0.5" placeholder="6.0">
+    </label>
+    <label class="field">
+      <span class="lbl">Auto-sync interval in minuten (0 = uit; nieuwe posts automatisch downloaden als de engine niet bezig is)</span>
+      <input type="number" id="set-auto_sync_minutes" min="0" max="1440" placeholder="0">
+    </label>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">Reddit sessie</h2>
+    <div class="row spread" style="margin-bottom:12px">
+      <span id="reddit-session-status" class="small">Status: nog niet gecontroleerd…</span>
+      <button type="button" id="reddit-verify" class="small">Verifieer</button>
+    </div>
+
+    <h3 style="margin:0 0 8px">Sessie-cookie plakken</h3>
+    <p class="small" style="margin-bottom:10px">Zo pak je je cookie uit de browser:</p>
+    <ol class="small" style="padding-left:18px;margin-bottom:12px;line-height:1.7">
+      <li>Log in op <b>reddit.com</b> in je browser</li>
+      <li>Druk op <kbd>F12</kbd> → tab <b>Application</b> (of "Toepassingen")</li>
+      <li>Klik links op <b>Cookies</b> → <b>reddit.com</b></li>
+      <li>Vind <span class="mono">reddit_session</span> → klik dubbel → <b>kopieer de waarde</b></li>
+      <li>Vind ook <span class="mono">loid</span> → kopieer die waarde</li>
+      <li>Plak ze hieronder en klik <b>Sessie opslaan</b></li>
+    </ol>
+    <label class="field">
+      <span class="lbl"><span class="mono">reddit_session</span></span>
+      <input type="text" id="reddit_manual_session" autocomplete="off" placeholder="eyJhbGciOiJSUzI1NiIs… (volledige waarde plakken)" style="width:100%;font-size:12px;word-break:break-all">
+    </label>
+    <label class="field">
+      <span class="lbl"><span class="mono">loid</span> <span class="small">(optioneel, maar aanbevolen)</span></span>
+      <input type="text" id="reddit_manual_loid" autocomplete="off" placeholder="0000000000…" style="width:100%;font-size:12px;word-break:break-all">
+    </label>
+    <button type="button" id="reddit-manual-save" class="primary" style="width:100%;margin-top:8px">Sessie opslaan</button>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">User-Agent</h2>
+    <label class="field">
+      <span class="lbl">User-Agent string</span>
+      <input type="text" id="set-user_agent" placeholder="linux:reddit-media-manager:v1.0 (personal use)">
+    </label>
+  </div>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Mediabestanden</h2>
+  <label class="field">
+    <span class="lbl">Welke bestandstypes opslaan?</span>
+    <div class="row" style="gap:12px;flex-wrap:wrap">
+      <label class="check" style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="set-file_types_photo" checked> Foto's</label>
+      <label class="check" style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="set-file_types_video" checked> Video's</label>
+      <label class="check" style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="set-file_types_gif" checked> GIFs</label>
+    </div>
+  </label>
+  <div class="grid2" style="margin-top:8px">
+    <label class="field">
+      <span class="lbl">Foto's converteren naar</span>
+      <select id="set-photo_format">
+        <option value="jpeg">JPG</option>
+        <option value="png">PNG</option>
+        <option value="webp">WebP</option>
+      </select>
+    </label>
+    <label class="field">
+      <span class="lbl">Video's converteren naar</span>
+      <select id="set-video_format">
+        <option value="mp4">MP4</option>
+        <option value="webm">WebM</option>
+        <option value="mkv">MKV</option>
+      </select>
+    </label>
+  </div>
+  <div class="grid2" style="margin-top:8px">
+    <label class="field">
+      <span class="lbl">Foto-kwaliteit bij conversie (40–100, hoger = betere kwaliteit, 95 = aanbevolen)</span>
+      <input type="number" id="set-photo_quality" min="40" max="100" placeholder="95">
+    </label>
+    <label class="field">
+      <span class="lbl">Video-kwaliteit CRF (0–51, lager = betere kwaliteit, 18 = visueel verliesloos)</span>
+      <input type="number" id="set-video_quality" min="0" max="51" placeholder="18">
+    </label>
+  </div>
+  <label class="field">
+    <span class="lbl">GIFs</span>
+    <div class="row" style="gap:16px">
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="set-gif_mode" value="keep" checked> Behouden als GIF</label>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="set-gif_mode" value="convert"> Converteren naar video</label>
+    </div>
+  </label>
+  <div class="grid2" style="margin-top:8px">
+    <label class="field">
+      <span class="lbl">Naamgeving van bestanden</span>
+      <select id="set-naming_mode">
+        <option value="flat">Vlak — <span class="mono">subreddit/post-titel.jpg</span> (aanbevolen)</option>
+        <option value="posts">Per post — <span class="mono">subreddit/datum-id/foto.jpg</span></option>
+      </select>
+    </label>
+    <label class="field">
+      <span class="lbl">Datuim-submap (alleen bij "Vlak")</span>
+      <select id="set-date_subfolder">
+        <option value="none">Geen — bestanden direct in de subreddit-map</option>
+        <option value="month">Per maand — <span class="mono">subreddit/2025-01/foto.jpg</span></option>
+      </select>
+    </label>
+  </div>
+  <p class="small">Tip: gebruik de knop "Migreren naar vlakke structuur" op het <a href="/history">History</a>-tab om bestaande bestanden uit post-mapjes omhoog te verplaatsen.</p>
+</div>
+
+<div class="panel">
+  <button id="save-settings" class="primary" style="width:100%">Opslaan</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadSettings() {
+    try {
+      const { settings } = await RMM.api("/api/settings");
+      for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "auto_sync_minutes", "photo_quality", "video_quality"]) {
+        const el = document.getElementById("set-" + k);
+        if (el) el.value = (settings[k] ?? "");
+      }
+      // Mediabestanden (dict: {photo, video, gif})
+      const ft = settings.file_types || { photo: true, video: true, gif: true };
+      const ftBool = (t) => {
+        if (typeof ft === "string") return ft.split(",").includes(t);
+        return !!ft[t];
+      };
+      document.getElementById("set-file_types_photo").checked = ftBool("photo");
+      document.getElementById("set-file_types_video").checked = ftBool("video");
+      document.getElementById("set-file_types_gif").checked = ftBool("gif");
+      const pf = document.getElementById("set-photo_format");
+      pf.value = (settings.photo_format === "jpg" ? "jpeg" : (settings.photo_format || "jpeg"));
+      if (!pf.value) pf.value = "jpeg";
+      const vf = document.getElementById("set-video_format");
+      if (settings.video_format) vf.value = settings.video_format;
+      const gm = settings.gif_mode || "keep";
+      document.querySelectorAll("input[name='set-gif_mode']").forEach(r => r.checked = (r.value === gm));
+      const nm = settings.naming_mode || "flat";
+      document.getElementById("set-naming_mode").value = nm;
+      document.getElementById("set-date_subfolder").value = settings.date_subfolder || "none";
+    } catch (e) { RMM.toast(e.message, "err"); }
+  }
+
+  async function checkSession() {
+    const el = document.getElementById("reddit-session-status");
+    try {
+      const r = await RMM.api("/api/reddit/verify", { method: "POST" });
+      el.innerHTML = `✅ Ingelogd als <b>${RMM.esc(r.username)}</b>`;
+      return true;
+    } catch (e) {
+      el.textContent = "❌ " + e.message;
+      return false;
+    }
+  }
+
+  document.getElementById("reddit-verify").onclick = async () => {
+    const ok = await checkSession();
+    RMM.toast(ok ? "Sessie is geldig" : "Sessie ongeldig — plak een nieuwe cookie en klik 'Sessie opslaan'", ok ? "ok" : "err");
+  };
+
+  document.getElementById("reddit-manual-save").onclick = async () => {
+    let sess = document.getElementById("reddit_manual_session").value.trim();
+    const ms = sess.match(/reddit_session[=\s]+([^;\s]+)/);
+    if (ms) sess = ms[1];
+    if (!sess) { RMM.toast("Plak de waarde van de reddit_session-cookie.", "err"); return; }
+
+    let loid = document.getElementById("reddit_manual_loid").value.trim();
+    const ml = loid.match(/loid[=\s]+([^;\s]+)/);
+    if (ml) loid = ml[1];
+
+    const payload = { reddit_session: sess };
+    if (loid) payload.reddit_loid = loid;
+    try {
+      await RMM.api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
+      RMM.toast("Cookies opgeslagen");
+      document.getElementById("reddit_manual_session").value = "";
+      document.getElementById("reddit_manual_loid").value = "";
+      await checkSession();
+    } catch (e) { RMM.toast(e.message, "err"); }
+  };
+
+  document.getElementById("save-settings").onclick = async () => {
+    const payload = {};
+    for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "auto_sync_minutes", "photo_quality", "video_quality"]) {
+      const el = document.getElementById("set-" + k);
+      if (el) payload[k] = el.value;
+    }
+    // Mediabestanden (dict)
+    payload.file_types = {
+      photo: document.getElementById("set-file_types_photo").checked,
+      video: document.getElementById("set-file_types_video").checked,
+      gif: document.getElementById("set-file_types_gif").checked
+    };
+    payload.photo_format = document.getElementById("set-photo_format").value;
+    payload.video_format = document.getElementById("set-video_format").value;
+    const gmRadio = document.querySelector("input[name='set-gif_mode']:checked");
+    payload.gif_mode = gmRadio ? gmRadio.value : "keep";
+    payload.naming_mode = document.getElementById("set-naming_mode").value;
+    payload.date_subfolder = document.getElementById("set-date_subfolder").value;
+    try {
+      await RMM.api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
+      RMM.toast("Settings opgeslagen");
+      loadSettings();
+    } catch (e) { RMM.toast(e.message, "err"); }
+  };
+
+  loadSettings();
+  checkSession();
+  RMM.startEngineBadgePoll();
+</script>
+{% endblock %}
