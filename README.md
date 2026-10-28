@@ -51,10 +51,10 @@ volumes:
 **Bestaande image** (GitHub Container Registry):
 
 ```bash
-docker pull ghcr.io/<jouw-gebruikersnaam>/reddit-media-manager:latest
+docker pull ghcr.io/espeon33471/reddit-media-manager:latest
 docker run -d --name reddit-media-manager -p 8000:8000 \
     -v rmm-data:/data --restart unless-stopped \
-    ghcr.io/<jouw-gebruikersnaam>/reddit-media-manager:latest
+    ghcr.io/espeon33471/reddit-media-manager:latest
 ```
 
 **Zelf bouwen**, zonder compose:
