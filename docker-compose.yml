@@ -5,10 +5,13 @@ services:
     ports:
       - "8000:8000"          # links: lokale poort — wijzig bij conflict
     environment:
-      - RMM_DATA=/data   # state.db, app.log én gedownloade media in het volume
+      - RMM_CONFIG=/config   # app-state: settings.json, state.db, app.log
+      - RMM_DATAROOT=/data   # gedownloade media (subreddit-mappen)
     volumes:
+      - rmm-config:/config
       - rmm-data:/data
     restart: unless-stopped
 
 volumes:
+  rmm-config:
   rmm-data:

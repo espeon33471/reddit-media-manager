@@ -1,13 +1,19 @@
 # Reddit Media Download Manager
 # Bouwen:  docker build -t reddit-media-manager .
 # Draaien: docker run -d --name reddit-media-manager -p 8000:8000 \
-#             -v rmm-data:/data --restart unless-stopped reddit-media-manager
+#             -v rmm-config:/config -v rmm-data:/data \
+#             --restart unless-stopped reddit-media-manager
 # (of gebruik docker-compose.yml)
+#
+# Mapping:
+#   /config → app-state (settings.json, state.db, app.log)
+#   /data   → gedownloade media (subreddit-mappen)
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    RMM_DATA=/data
+    RMM_CONFIG=/config \
+    RMM_DATAROOT=/data
 
 WORKDIR /app
 
@@ -23,12 +29,13 @@ COPY rmm/ ./rmm/
 COPY templates/ ./templates/
 COPY static/ ./static/
 
-# Draai niet als root; /data is de volume-map (state.db, app.log, media).
+# Draai niet als root; /config (state) en /data (media) zijn de volume-mappen.
 RUN useradd --create-home rmm \
-    && mkdir -p /data \
-    && chown -R rmm:rmm /data
+    && mkdir -p /config /data \
+    && chown -R rmm:rmm /config /data
 USER rmm
 
+VOLUME /config
 VOLUME /data
 EXPOSE 8000
 

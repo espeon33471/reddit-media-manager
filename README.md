@@ -11,7 +11,7 @@ NSFW/age-gated en private subreddits worden ondersteund via je eigen Reddit-sess
 - **Subreddit-detectie**: automatisch je gesubscribde subreddits ophalen (ook NSFW/age-gated en private), of bulk-importeren
 - **Media-download**: foto's, video's en GIFs per post (per type in/uitschakelbaar)
 - **Uniform formaat & kwaliteit**: foto's → JPEG (qualiteit 95), video's → MP4 (CRF 18), GIFs blijven geanimeerde GIFs (of converteren naar video)
-- **Vlakke opslag**: `downloads/u_<subreddit>/<bestand>`, optioneel maand-submappen of per-post mappen met `meta.json`
+- **Vlakke opslag**: `<dataroot>/u_<subreddit>/<bestand>`, optioneel maand-submappen of per-post mappen met `meta.json`
 - **Deduplicatie op 3 niveaus**: post-id, URL én sha256-inhoud (ook tussen subreddits)
 - **Web UI** met tabs: Dashboard, Subreddits, Queue, History, Galerij (met preview) en Settings
 - **Auto-sync** (optioneel: elke X minuten)
@@ -37,12 +37,15 @@ services:
     ports:
       - "8000:8000"          # links: lokale poort — wijzig bij conflict
     environment:
-      - RMM_DATA=/data       # state.db, app.log én gedownloade media in het volume
+      - RMM_CONFIG=/config   # settings.json, state.db, app.log
+      - RMM_DATAROOT=/data   # gedownloade media
     volumes:
+      - rmm-config:/config
       - rmm-data:/data
     restart: unless-stopped
 
 volumes:
+  rmm-config:
   rmm-data:
 ```
 
@@ -53,7 +56,7 @@ volumes:
 ```bash
 docker pull ghcr.io/espeon33471/reddit-media-manager:latest
 docker run -d --name reddit-media-manager -p 8000:8000 \
-    -v rmm-data:/data --restart unless-stopped \
+    -v rmm-config:/config -v rmm-data:/data --restart unless-stopped \
     ghcr.io/espeon33471/reddit-media-manager:latest
 ```
 
@@ -62,7 +65,7 @@ docker run -d --name reddit-media-manager -p 8000:8000 \
 ```bash
 docker build -t reddit-media-manager .
 docker run -d --name reddit-media-manager -p 8000:8000 \
-    -v rmm-data:/data --restart unless-stopped reddit-media-manager
+    -v rmm-config:/config -v rmm-data:/data --restart unless-stopped reddit-media-manager
 ```
 
 **Zonder Docker:**
@@ -75,15 +78,17 @@ uvicorn app:app --host 127.0.0.1 --port 8000
 
 **Details:**
 
-- **Data**: de container zet `RMM_DATA=/data`. Daarin staan `state.db`, `app.log`
-  en de media (`/data/downloads/u_<sub>/…`). De named volume `rmm-data` bewaart ze.
+- **Config (`/config`)**: `settings.json`, `state.db` en `app.log` — de toestand
+  van de app zelf. Volume `rmm-config` bewaart ze.
+- **Media (`/data`)**: daarin staan de gedownloade bestanden
+  (`/data/u_<sub>/…`). Volume `rmm-data` bewaart ze.
 - **Media op eigen pad**: mount in plaats van een named volume een host-map,
   bv. `-v D:\Media\reddit:/data` (Windows/Docker Desktop) of
   `-v /pad/naar/media:/data` (Linux). Op Linux moet die map schrijfbaar zijn
   voor de container-user, bv. `chown 1000:1000 /pad/naar/media`.
 - **Poort**: bij een conflict de linkszijde van `"8000:8000"` in
   `docker-compose.yml` wijzigen.
-- **Logs**: `docker logs -f reddit-media-manager` (ook in `/data/app.log`).
+- **Logs**: `docker logs -f reddit-media-manager` (ook in `/config/app.log`).
 - **Healthcheck** zit in de Dockerfile: `docker ps` toont `healthy` zodra de
   API antwoordt. De container draait niet als root (user `rmm`).
 
@@ -100,7 +105,7 @@ app ook NSFW/age-gated en private subreddits lezen.
 3. Kopieer de waarde van `reddit_session` (optioneel ook `loid`).
 4. Plak die in **Settings → Reddit (sessie-cookie)** en sla op. De app
    verifieert direct via `GET /api/v1/me` en slaat de cookie **lokaal** op in
-   `settings.json` (in het data-volume). De waarde wordt nooit verstuurd naar
+   `settings.json` (in het config-volume `/config`). De waarde wordt nooit verstuurd naar
    een andere server dan reddit.com.
 
 > Plakken in de vorm `reddit_session=eyJ…` wordt ook herkend.
@@ -162,7 +167,7 @@ python example_sync.py pics --full         # resync vanaf het begin
 Standaard (**vlak**, `naming_mode: flat`):
 
 ```
-<dataroot>/                    (standaard /data/downloads; instelbaar)
+<dataroot>/                    (standaard /data; instelbaar)
   u_<subreddit>/
     01.jpg
     02.jpg
@@ -214,7 +219,7 @@ Drie niveaus, dus ook **tussen verschillende subreddits** geen dubbele bestanden
 - **Inhoud-level**: na download wordt de sha256 geverifieerd; bestaat een
   identiek bestand al (andere URL/subreddit)? → nieuw bestand wordt verwijderd, item `skipped`.
 
-Database `state.db` in de datamap (in Docker: `/data/state.db`). Tabellen:
+Database `state.db` in de configmap (in Docker: `/config/state.db`). Tabellen:
 
 | Tabel | Inhoud |
 |---|---|
@@ -227,7 +232,7 @@ Database `state.db` in de datamap (in Docker: `/data/state.db`). Tabellen:
 
 | Instelling | Standaard | Toelichting |
 |---|---|---|
-| `dataroot` | `/data/media` | Map waar `downloads/` komt te staan |
+| `dataroot` | `/data` | Map waar `u_<sub>/…` komt te staan (default `/data`) |
 | `concurrency` | `4` | Aantal gelijktijdige downloads |
 | `request_interval` | `6.0` s | Wachtijd tussen Reddit-API-aanroepen |
 | `user_agent` | browser-UA | User-Agent voor alle requests |
@@ -244,7 +249,7 @@ Database `state.db` in de datamap (in Docker: `/data/state.db`). Tabellen:
 
 ## Logging
 
-Console + roterend `app.log` (2 MB × 3) in de datamap. Elke queue-item-fout
+Console + roterend `app.log` (2 MB × 3) in de configmap. Elke queue-item-fout
 wordt gelogd én in de UI getoond; workers sterven nooit per item.
 
 ## Troubleshooting
@@ -257,7 +262,7 @@ wordt gelogd én in de UI getoond; workers sterven nooit per item.
 | Downloads staan stil | Rate-limit/backoff: zie `app.log`; eventueel netwerk. |
 | `401` bij reads | Sessie verlopen: nieuwe `reddit_session`-cookie plakken. |
 | Dubbele bestanden? | Moeten niet voorkomen; controleer of je niet twee draaiende instanties met dezelfde dataroot hebt. |
-| Docker: data verdwijnt na `docker rm` | Volume niet gemount — gebruik `docker-compose.yml` of `-v rmm-data:/data`. |
+| Docker: data verdwijnt na `docker rm` | Volumes niet gemount — gebruik `docker-compose.yml` of `-v rmm-config:/config -v rmm-data:/data`. |
 
 ## Projectstructuur
 
@@ -267,7 +272,7 @@ reddit-media-manager/
 ├── example_sync.py        # werkend headless-voorbeeld
 ├── requirements.txt
 ├── Dockerfile             # container-image (python:3.12-slim + ffmpeg, niet-root, healthcheck)
-├── docker-compose.yml     # compose: poort 8000, volume rmm-data → /data
+├── docker-compose.yml     # compose: poort 8000, volumes rmm-config → /config en rmm-data → /data
 ├── .dockerignore          # houdt runtime-data (state.db, downloads, …) buiten de image
 ├── .gitignore
 ├── README.md

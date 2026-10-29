@@ -5,9 +5,12 @@ __pycache__/
 venv/
 
 # Runtime-data (blijft in het Docker-volume, hoort niet in de repo)
+config/
+settings.json
 state.db
 state.db-*
 app.log
+app.log.*
 data/
 downloads/
 

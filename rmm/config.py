@@ -9,12 +9,19 @@ from pathlib import Path
 from typing import Any
 
 APP_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(os.environ.get("RMM_DATA", APP_ROOT / "data"))
-SETTINGS_PATH = DATA_DIR / "settings.json"
+
+# /config → app-state: settings.json, state.db, app.log
+# (fallback op legacy `RMM_DATA` zodat bestaande installs niet breken)
+_raw_config = (os.environ.get("RMM_CONFIG") or os.environ.get("RMM_DATA") or "").strip()
+CONFIG_DIR = Path(_raw_config).expanduser() if _raw_config else APP_ROOT / "config"
+SETTINGS_PATH = CONFIG_DIR / "settings.json"
+
+# /data → gedownloade media (subreddit-mappen); in Docker standaard /data
+DEFAULT_DATAROOT = os.environ.get("RMM_DATAROOT", str(APP_ROOT / "data"))
 
 
 DEFAULTS: dict[str, Any] = {
-    "dataroot": os.environ.get("RMM_DATAROOT", "/data/media"),
+    "dataroot": DEFAULT_DATAROOT,
     "concurrency": int(os.environ.get("RMM_CONCURRENCY", "4")),
     "request_interval": float(os.environ.get("RMM_REQUEST_INTERVAL", "6.0")),
     "user_agent": os.environ.get(
@@ -81,7 +88,7 @@ def save_settings(patch: dict[str, Any]) -> dict[str, Any]:
     for k, v in patch.items():
         if k in DEFAULTS:
             current[k] = v
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(json.dumps(current, indent=2, ensure_ascii=False), "utf-8")
     return current
 

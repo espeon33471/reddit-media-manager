@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from rmm.config import DEFAULTS, DATA_DIR, SETTINGS_PATH, load_settings, save_settings
+from rmm.config import DEFAULTS, CONFIG_DIR, DEFAULT_DATAROOT, SETTINGS_PATH, load_settings, save_settings
 from rmm.db import DB
 from rmm.downloader import MediaDownloader
 from rmm.engine import Engine
@@ -31,18 +31,18 @@ from rmm.util import sanitize_sub, setup_logging
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-setup_logging(str(DATA_DIR / "app.log"))
+setup_logging(str(CONFIG_DIR / "app.log"))
 log = logging.getLogger("rmm.app")
 
-DB_PATH = DATA_DIR / "state.db"
+DB_PATH = CONFIG_DIR / "state.db"
 
 
 # --------------------------------------------------------------------------- helpers
 def resolve_dataroot(dataroot: str) -> str:
-    """Relatieve dataroot-padten t.o.v. de datamap (RMM_DATA of projectmap)."""
-    p = Path(dataroot or "downloads").expanduser()
-    if not p.is_absolute():
-        p = DATA_DIR / p
+    """Relatieve dataroot-padten t.o.v. de configmap (RMM_CONFIG of projectmap)."""
+    p = Path(dataroot or "").expanduser()
+    if not str(p) or not p.is_absolute():
+        p = Path(DEFAULT_DATAROOT) / p
     return str(p)
 
 
@@ -61,7 +61,7 @@ state = AppState()
 
 
 def dataroot_fn() -> str:
-    return resolve_dataroot(state.settings.get("dataroot", "/data/media"))
+    return resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))
 
 
 # --------------------------------------------------------------------------- background
@@ -371,7 +371,7 @@ async def api_history_delete(payload: dict) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="sub en post_id vereist")
     # Bestanden alleen verwijderen als géén andere rij (bv. in een andere sub)
     # dezelfde bestandsreferentie heeft.
-    root_p = Path(resolve_dataroot(state.settings.get("dataroot", "/data/media"))).resolve()
+    root_p = Path(resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))).resolve()
     post_paths = {
         r["local_path"]
         for r in await state.db.query(
@@ -459,7 +459,7 @@ async def _flatten_sub(base: Path, sub: str, skip_month_dirs: bool = False) -> d
 @app.post("/api/migrate/flatten")
 async def api_migrate_flatten() -> dict[str, Any]:
     """Vlakke mapstructuur: `<sub>/post-mapje/foto.jpg` → `<sub>/foto.jpg`. Idempotent."""
-    base = Path(resolve_dataroot(state.settings.get("dataroot", "/data/media"))).resolve()
+    base = Path(resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))).resolve()
     skip_month_dirs = state.settings.get("date_subfolder") == "month"
     total_moved, total_skipped, total_dirs = 0, 0, 0
     relocated: list[tuple[str, str]] = []
@@ -491,7 +491,7 @@ async def api_migrate_flatten() -> dict[str, Any]:
 @app.get("/api/dedup/similar")
 async def api_dedup_similar() -> dict[str, Any]:
     """Groepen van identieke bestanden (zelfde sha256, status done)."""
-    dataroot = resolve_dataroot(state.settings.get("dataroot", "/data/media"))
+    dataroot = resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))
     groups = await state.db.query(
         """
         SELECT sha256, COUNT(*) AS c, GROUP_CONCAT(id) AS ids
@@ -626,7 +626,7 @@ async def api_media(
 @app.get("/media/{path:path}")
 async def serve_media(path: str) -> FileResponse:
     """Dien gedownloade media bestanden op (met path-traversal bescherming)."""
-    dataroot = resolve_dataroot(state.settings.get("dataroot", "/data/media"))
+    dataroot = resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))
     base = Path(dataroot).resolve()
     target = (base / path).resolve()
     # Veilig: `is_relative_to` voorkomt ook sibling-dirs (`/data/media-evil`).

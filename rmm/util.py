@@ -38,11 +38,12 @@ def setup_logging(log_file: str = "app.log") -> None:
 
 
 def data_dir() -> "Path | None":
-    """Env-var `RMM_DATA`: één map voor state.db, log en media (bv. /data in Docker).
+    """Env-var `RMM_CONFIG` (legacy `RMM_DATA`): map voor state.db, log, settings.
 
     Leeg/onopgegeven → None: alles blijft in de projectmap (standaardgedrag).
+    Gedownloade media staan in `dataroot` (`RMM_DATAROOT`), niet in deze map.
     """
-    raw = (os.environ.get("RMM_DATA") or "").strip()
+    raw = (os.environ.get("RMM_CONFIG") or os.environ.get("RMM_DATA") or "").strip()
     return Path(raw).expanduser() if raw else None
 
 

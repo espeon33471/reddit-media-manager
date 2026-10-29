@@ -24,7 +24,8 @@ from rmm.sync import SyncService
 from rmm.util import data_dir, sanitize_sub, setup_logging
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-# Zelfde datamap-logic als de web-app (RMM_DATA_DIR, bv. /data in Docker).
+# Zelfde configmap-logic als de web-app (RMM_CONFIG, bv. /config in Docker)
+# voor state.db/app.log; gedownloade media staan in `settings.dataroot` (RMM_DATAROOT, bv. /data).
 DATA_DIR = data_dir()
 BASE_DIR = (DATA_DIR or PROJECT_ROOT)
 

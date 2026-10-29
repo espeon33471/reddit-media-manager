@@ -5,6 +5,8 @@ __pycache__/
 .gitignore
 .venv/
 venv/
+config/
+settings.json
 state.db
 state.db-*
 downloads/
