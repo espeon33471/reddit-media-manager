@@ -89,7 +89,19 @@ def save_settings(patch: dict[str, Any]) -> dict[str, Any]:
         if k in DEFAULTS:
             current[k] = v
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(current, indent=2, ensure_ascii=False), "utf-8")
+    try:
+        SETTINGS_PATH.write_text(json.dumps(current, indent=2, ensure_ascii=False), "utf-8")
+    except PermissionError as exc:
+        raise RuntimeError(
+            "Kan instellingen niet opslaan: de map /config is niet schrijfbaar door "
+            "de app-gebruiker (rmm). Los op met: docker exec -u root <container> "
+            "chown -R rmm:rmm /config  (of gebruik het image met de auto-chown "
+            f"entrypoint). Oorsprong: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"Kan instellingen niet opslaan naar {SETTINGS_PATH}: {exc}"
+        ) from exc
     return current
 
 

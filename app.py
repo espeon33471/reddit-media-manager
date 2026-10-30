@@ -691,7 +691,12 @@ async def api_set_settings(payload: dict) -> dict[str, Any]:
         else:
             patch[key] = "" if value is None else str(value)
     # In-place mutatie: engine/sync/downloader delen dezelfde dict-referentie.
-    state.settings.update(save_settings(patch))
+    try:
+        state.settings.update(save_settings(patch))
+    except RuntimeError as exc:
+        # Duidelijke melding i.p.v. een kale 500 (bijv. /config niet schrijfbaar).
+        log.error("Settings opslaan mislukt: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     log.info("Settings bijgewerkt: %s", sorted(patch))
     return {"settings": dict(state.settings)}
 

@@ -1,5 +1,6 @@
 services:
   reddit-media-manager:
+    image: ghcr.io/espeon33471/reddit-media-manager:latest
     build: .
     container_name: reddit-media-manager
     ports:
@@ -14,4 +15,6 @@ services:
 
 volumes:
   rmm-config:
+    name: rmm-config   # vaste naam: app-state (settings.json, state.db, app.log)
   rmm-data:
+    name: rmm-data     # vaste naam: gedownloade media
