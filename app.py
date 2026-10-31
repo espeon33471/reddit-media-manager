@@ -55,6 +55,9 @@ class AppState:
         self.engine: Optional[Engine] = None
         self.sync: Optional[SyncService] = None
         self.autosync_task: Optional[asyncio.Task] = None
+        # Epoch-tijd van de laatste auto-sync-run. Wordt op start op 'nu' gezet,
+        # zodat na een restart niet meteen een volledige batch draait.
+        self.autosync_last_run: float = time.time()
 
 
 state = AppState()
@@ -66,25 +69,47 @@ def dataroot_fn() -> str:
 
 # --------------------------------------------------------------------------- background
 async def autosync_loop() -> None:
-    """Elke 30s checken: auto_sync_minutes > 0 en engine niet bezig → sync alle enabled subs."""
+    """Periodiek (elke `auto_sync_minutes`) de deelnemende subreddits syncen.
+
+    Alleen subreddits met `auto_sync = 1` doen mee. Het interval wordt daadwerkelijk
+    afgedwongen via `autosync_last_run` (niet alleen aan/uit). Enqueuen is onafhankelijk
+    van de download-engine: nieuwe posts worden ingezet of de engine nu draait of
+    stilstaat; als er nieuw werk is en de engine stilstaat, wordt hij gestart.
+    """
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(20)
         try:
             mins = int(state.settings.get("auto_sync_minutes", 0) or 0)
             if mins <= 0:
                 continue
-            if state.engine is None or state.engine.state == "running":
+            if state.engine is None or state.sync is None:
+                continue
+            # Interval daadwerkelijk afdwingen (minimaal 1 minuut).
+            interval_s = max(60, mins * 60)
+            now = time.time()
+            if now - state.autosync_last_run < interval_s:
                 continue
             subs = await state.db.query(
-                "SELECT sub FROM subs WHERE enabled = 1 ORDER BY sub"
+                "SELECT sub FROM subs WHERE enabled = 1 AND auto_sync = 1 ORDER BY sub"
             )
+            if not subs:
+                continue
+            # Eerst 'nu' noteren, daarna werk doen (voorkomt dubbele runs).
+            state.autosync_last_run = now
+            total_enqueued = 0
+            failed = 0
             for row in subs:
-                if state.engine.state == "running":
-                    break
                 try:
-                    await state.sync.sync_sub(row["sub"], "new")
+                    summary = await state.sync.sync_sub(row["sub"], "new")
+                    total_enqueued += int(summary.get("files_enqueued", 0) or 0)
                 except Exception as exc:  # noqa: BLE001 — autosync mag nooit crashen
+                    failed += 1
                     log.warning("Auto-sync %s mislukt: %s", row["sub"], exc)
+            # Start/hervat de engine alleen als hij stilstaat en er nieuw werk is.
+            if total_enqueued > 0 and state.engine.state == "stopped":
+                await state.engine.resume()
+            log.info("Auto-sync: %d subreddits bekeken, %d items ingezet, %d mislukt",
+                     len(subs), total_enqueued, failed)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -258,6 +283,7 @@ async def api_sub_config(sub: str, payload: dict) -> dict[str, Any]:
             max_posts=(payload or {}).get("max_posts"),
             date_from=(payload or {}).get("date_from"),
             sort=(payload or {}).get("sort"),
+            auto_sync=(payload or {}).get("auto_sync"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -664,7 +690,21 @@ async def serve_media(path: str) -> FileResponse:
 # --------------------------------------------------------------------------- settings
 @app.get("/api/settings")
 async def api_get_settings() -> dict[str, Any]:
-    return {"settings": dict(state.settings)}
+    try:
+        row = await state.db.one(
+            "SELECT COUNT(*) AS n FROM subs WHERE enabled = 1 AND auto_sync = 1"
+        )
+        n_auto = int(row["n"]) if row else 0
+    except Exception:  # noqa: BLE001 — DB nog niet klaar → 0 tonen
+        n_auto = 0
+    return {
+        "settings": dict(state.settings),
+        "autosync": {
+            "last_run": state.autosync_last_run,
+            "enabled": int(state.settings.get("auto_sync_minutes", 0) or 0) > 0,
+            "participating": n_auto,
+        },
+    }
 
 
 @app.post("/api/settings")

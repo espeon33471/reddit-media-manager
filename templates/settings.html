@@ -18,10 +18,23 @@
       <span class="lbl">Min. seconde(n) tussen Reddit-API-aanroepen (~10/min = 6.0)</span>
       <input type="number" id="set-request_interval" min="0.5" max="60" step="0.5" placeholder="6.0">
     </label>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">Auto-sync</h2>
+    <p class="small" style="margin-top:0">Download automatisch nieuwe posts van de aangemelde subreddits, op een vast interval. Stel het interval in onderaan dit paneel; <strong>welke subreddits</strong> meedoen kies je per subreddit op het tabblad <strong>Subreddits</strong> (vinkje «Auto-sync»).</p>
     <label class="field">
-      <span class="lbl">Auto-sync interval in minuten (0 = uit; nieuwe posts automatisch downloaden als de engine niet bezig is)</span>
-      <input type="number" id="set-auto_sync_minutes" min="0" max="1440" placeholder="0">
+      <span class="lbl">Elke … automatisch syncen (0 = uit)</span>
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <input type="number" id="set-auto_sync_hours" min="0" max="23" placeholder="0" style="width:92px">
+        <span class="small">uur</span>
+        <input type="number" id="set-auto_sync_min" min="0" max="59" placeholder="0" style="width:92px">
+        <span class="small">minuten</span>
+      </div>
     </label>
+    <div class="row spread" style="margin-top:10px">
+      <span id="autosync-status" class="small">Laatste auto-sync: nog niet</span>
+    </div>
   </div>
 
   <div class="panel">
@@ -134,10 +147,25 @@
 <script>
   async function loadSettings() {
     try {
-      const { settings } = await RMM.api("/api/settings");
-      for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "auto_sync_minutes", "photo_quality", "video_quality"]) {
+      const { settings, autosync } = await RMM.api("/api/settings");
+      for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality"]) {
         const el = document.getElementById("set-" + k);
         if (el) el.value = (settings[k] ?? "");
+      }
+      // Auto-sync: geslagen in minuten → tonen als uren + minuten.
+      const totalMin = parseInt(settings.auto_sync_minutes ?? 0, 10) || 0;
+      const ahEl = document.getElementById("set-auto_sync_hours"); if (ahEl) ahEl.value = Math.floor(totalMin / 60);
+      const amEl = document.getElementById("set-auto_sync_min"); if (amEl) amEl.value = totalMin % 60;
+      const asEl = document.getElementById("autosync-status");
+      if (asEl && autosync) {
+        if (!autosync.enabled) {
+          asEl.textContent = autosync.participating > 0
+            ? `Uit — ${autosync.participating} subreddits aangemeld`
+            : "Uit — nog geen subreddits aangemeld (zie tabblad Subreddits)";
+        } else {
+          const ts = autosync.last_run ? new Date(autosync.last_run * 1000) : null;
+          asEl.textContent = `Laatste auto-sync: ${ts ? ts.toLocaleString() : "nog niet"} — ${autosync.participating} subreddits meegedaan`;
+        }
       }
       // Mediabestanden (dict: {photo, video, gif})
       const ft = settings.file_types || { photo: true, video: true, gif: true };
@@ -201,10 +229,14 @@
 
   document.getElementById("save-settings").onclick = async () => {
     const payload = {};
-    for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "auto_sync_minutes", "photo_quality", "video_quality"]) {
+    for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality"]) {
       const el = document.getElementById("set-" + k);
       if (el) payload[k] = el.value;
     }
+    // Auto-sync: uren + minuten → totaal aantal minuten (0 = uit).
+    const ah = parseInt(document.getElementById("set-auto_sync_hours").value || "0", 10) || 0;
+    const am = parseInt(document.getElementById("set-auto_sync_min").value || "0", 10) || 0;
+    payload.auto_sync_minutes = (ah * 60) + am;
     // Mediabestanden (dict)
     payload.file_types = {
       photo: document.getElementById("set-file_types_photo").checked,

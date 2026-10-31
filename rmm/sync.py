@@ -67,12 +67,14 @@ class SyncService:
         return {"added": added, "existing": existing, "names": names}
 
     async def update_sub(self, sub: str, *, enabled: bool | None = None, max_posts: int | None = None,
-                         date_from: str | None = None, sort: str | None = None) -> dict[str, Any]:
+                         date_from: str | None = None, sort: str | None = None,
+                         auto_sync: bool | None = None) -> dict[str, Any]:
         sub = sanitize_sub(sub)
         row = await self.db.one("SELECT * FROM subs WHERE sub = ?", (sub,))
         if row is None:
             raise ValueError(f"Subreddit '{sub}' staat niet in de lijst.")
         enabled = row["enabled"] if enabled is None else (1 if enabled else 0)
+        auto_sync = row["auto_sync"] if auto_sync is None else (1 if auto_sync else 0)
         if max_posts is not None:
             max_posts = max(0, int(max_posts))
         date_from = row["date_from"] if date_from is None else (date_from or "").strip()
@@ -80,8 +82,8 @@ class SyncService:
         if sort not in SORTS:
             sort = "new"
         await self.db.execute(
-            "UPDATE subs SET enabled = ?, max_posts = ?, date_from = ?, sort = ? WHERE sub = ?",
-            (enabled, max_posts, date_from, sort, sub),
+            "UPDATE subs SET enabled = ?, max_posts = ?, date_from = ?, sort = ?, auto_sync = ? WHERE sub = ?",
+            (enabled, max_posts, date_from, sort, auto_sync, sub),
         )
         return await self.get_sub(sub)  # type: ignore[return-value]
 

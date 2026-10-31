@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS subs (
   enabled   INTEGER NOT NULL DEFAULT 1,
   max_posts INTEGER NOT NULL DEFAULT 0,
   date_from TEXT,
-  sort      TEXT    NOT NULL DEFAULT 'new'
+  sort      TEXT    NOT NULL DEFAULT 'new',
+  auto_sync INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -75,6 +76,7 @@ class DB:
             ("post_author", "ALTER TABLE downloads ADD COLUMN post_author TEXT"),
             ("bytes_done", "ALTER TABLE downloads ADD COLUMN bytes_done INTEGER NOT NULL DEFAULT 0"),
             ("candidates", "ALTER TABLE downloads ADD COLUMN candidates TEXT"),
+            ("auto_sync", "ALTER TABLE subs ADD COLUMN auto_sync INTEGER NOT NULL DEFAULT 0"),
         ):
             try:
                 await self.conn.execute(ddl)

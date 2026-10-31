@@ -34,6 +34,7 @@
     <thead>
       <tr>
         <th class="checkbox-cell"></th>
+        <th class="checkbox-cell" title="Deze subreddit doet automatisch mee aan de sync (interval instelbaar onder Settings → Auto-sync)">Auto</th>
         <th>Subreddit</th>
         <th>Max posts <span class="small">(0 = alles)</span></th>
         <th>Voorbij datum</th>
@@ -43,7 +44,7 @@
         <th>Acties</th>
       </tr>
     </thead>
-    <tbody id="subs-body"><tr><td colspan="8" class="small">Subreddits laden…</td></tr></tbody>
+    <tbody id="subs-body"><tr><td colspan="9" class="small">Subreddits laden…</td></tr></tbody>
   </table>
 </div>
 {% endblock %}
@@ -55,12 +56,13 @@
       const { subs } = await RMM.api("/api/subs");
       const body = document.getElementById("subs-body");
       if (!subs.length) {
-        body.innerHTML = '<tr><td colspan="8" class="small">Nog geen subreddits. Importeer er hierboven.</td></tr>';
+        body.innerHTML = '<tr><td colspan="9" class="small">Nog geen subreddits. Importeer er hierboven.</td></tr>';
         return;
       }
       body.innerHTML = subs.map(s => `
         <tr data-sub="${RMM.esc(s.sub)}">
           <td class="checkbox-cell"><input type="checkbox" class="f-enabled" ${s.enabled ? "checked" : ""}></td>
+          <td class="checkbox-cell" title="Meedoet automatisch mee aan de sync"><input type="checkbox" class="f-autosync" ${s.auto_sync ? "checked" : ""}></td>
           <td><strong>r/</strong>${RMM.esc(s.sub)}</td>
           <td><input type="number" min="0" class="f-max" style="width:90px" value="${s.max_posts ?? 0}"></td>
           <td><input type="date" class="f-date" value="${s.date_from || ""}"></td>
@@ -82,6 +84,7 @@
         const sub = tr.dataset.sub;
         const readCfg = () => ({
           enabled: tr.querySelector(".f-enabled").checked,
+          auto_sync: tr.querySelector(".f-autosync").checked,
           max_posts: parseInt(tr.querySelector(".f-max").value || "0", 10),
           date_from: tr.querySelector(".f-date").value,
           sort: tr.querySelector(".f-sort").value
@@ -113,7 +116,7 @@
       });
     } catch (e) {
       document.getElementById("subs-body").innerHTML =
-        `<tr><td colspan="8" class="small">Fout: ${RMM.esc(e.message)}</td></tr>`;
+        `<tr><td colspan="9" class="small">Fout: ${RMM.esc(e.message)}</td></tr>`;
     }
   }
 
