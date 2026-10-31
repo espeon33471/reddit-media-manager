@@ -51,13 +51,13 @@ volumes:
 
 ### Alternatieven
 
-**Bestaande image** (GitHub Container Registry):
+**Image pullen uit een eigen registry** (optioneel):
 
 ```bash
-docker pull ghcr.io/espeon33471/reddit-media-manager:latest
+docker pull <JE-REGISTRY>/reddit-media-manager:latest
 docker run -d --name reddit-media-manager -p 8000:8000 \
     -v rmm-config:/config -v rmm-data:/data --restart unless-stopped \
-    ghcr.io/espeon33471/reddit-media-manager:latest
+    <JE-REGISTRY>/reddit-media-manager:latest
 ```
 
 **Zelf bouwen**, zonder compose:

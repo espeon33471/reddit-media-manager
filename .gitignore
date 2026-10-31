@@ -18,3 +18,6 @@ downloads/
 .DS_Store
 Thumbs.db
 nul
+
+# Diagnostiek-scripts (niet committen)
+_diag*.py

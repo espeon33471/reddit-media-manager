@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .db import DB
-from .media import classify_media, extract_media_urls
+from .media import classify_media, extract_media_items
+from .external import resolve_external_video
 from .reddit import RedditClient, RedditError
 from .util import now_iso, sanitize_sub
 
@@ -157,13 +158,21 @@ class SyncService:
                     if not post_id:
                         continue
 
-                    # Post-level dedup: post staat al in downloads → hele post skippen.
-                    seen = await self.db.one(
-                        "SELECT id FROM downloads WHERE sub = ? AND post_id = ?", (sub, post_id)
+                    # Post-level dedup: skip alleen als er al een 'done' bestand is.
+                    # Posts met uitsluitend failed/skipped/pending worden bij een
+                    # re-sync opnieuw geprobeerd (bijv. na een media/NSFW-fix).
+                    done_row = await self.db.one(
+                        "SELECT id FROM downloads WHERE sub = ? AND post_id = ? AND status = 'done' LIMIT 1",
+                        (sub, post_id),
                     )
-                    if seen:
+                    if done_row:
                         summary["already_seen_posts"] += 1
                         continue
+                    # Oude failed/skipped rijen opruimen zodat een retry geen duplicaten maakt.
+                    await self.db.execute(
+                        "DELETE FROM downloads WHERE sub = ? AND post_id = ? AND status IN ('failed','skipped')",
+                        (sub, post_id),
+                    )
 
                     created_utc = float(data.get("created_utc") or 0)
                     if date_from_ts is not None and created_utc and created_utc < date_from_ts:
@@ -175,8 +184,17 @@ class SyncService:
                         )
                         continue
 
-                    urls = extract_media_urls(child)
-                    if not urls:
+                    items = extract_media_items(child)  # list[list[str]]
+
+                    # Externe video (RedGifs/Gifer): los de ANIMEERDE MP4 op en
+                    # maak hem de eerste kandidaat (statische preview blijft fallback).
+                    # NB: resolve_external_video leest data.get('url'/'media') — dus de
+                    # DATA-dict meedoen, niet de {kind, data}-wrapper (anders leeg).
+                    ext_cands = await resolve_external_video(child.get("data", child))
+                    if ext_cands:
+                        items = ([ext_cands + items[0]] + items[1:]) if items else [ext_cands]
+
+                    if not items:
                         # Lege post (geen media) → skipped, geen fout.
                         summary["empty_posts"] += 1
                         await self.db.execute(
@@ -188,15 +206,15 @@ class SyncService:
 
                     # File-type filtering op basis van settings (dict of legacy comma-string)
                     enabled_types = self._enabled_file_types()
-                    filtered_urls: list[str] = []
-                    for url in urls:
-                        mtype = classify_media(url)
+                    kept_items: list[list[str]] = []
+                    for cands in items:
+                        mtype = classify_media(cands[0])
                         if mtype is None:
-                            filtered_urls.append(url)  # onbekend → toch toevoegen
+                            kept_items.append(cands)  # onbekend → toch toevoegen
                         elif mtype in enabled_types:
-                            filtered_urls.append(url)
+                            kept_items.append(cands)
 
-                    if not filtered_urls:
+                    if not kept_items:
                         await self.db.execute(
                             "INSERT INTO downloads(sub, post_id, url, status, error) "
                             "VALUES (?, ?, '', 'skipped', 'file type niet geselecteerd')",
@@ -210,17 +228,17 @@ class SyncService:
                     )
                     post_title = (data.get("title") or "").strip()
                     post_author = data.get("author") or ""
-                    for url in filtered_urls:
+                    for cands in kept_items:
                         await self.db.execute(
-                            "INSERT INTO downloads(sub, post_id, url, status, post_date, post_title, post_author) "
-                            "VALUES (?, ?, ?, 'pending', ?, ?, ?)",
-                            (sub, post_id, url, post_date, post_title, post_author),
+                            "INSERT INTO downloads(sub, post_id, url, candidates, status, post_date, post_title, post_author) "
+                            "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
+                            (sub, post_id, cands[0], json.dumps(cands), post_date, post_title, post_author),
                         )
-                    summary["files_enqueued"] += len(filtered_urls)
+                    summary["files_enqueued"] += len(kept_items)
                     new_in_page += 1
 
-                    self._write_meta(sub, post_id, data, filtered_urls, post_date)
-                    log.info("Ingepland %s/%s: %d bestanden (%d overgeslagen)", sub, post_id, len(filtered_urls), len(urls) - len(filtered_urls))
+                    self._write_meta(sub, post_id, data, [c[0] for c in kept_items], post_date)
+                    log.info("Ingepland %s/%s: %d bestanden (%d overgeslagen)", sub, post_id, len(kept_items), len(items) - len(kept_items))
 
                     if max_posts and summary["new_posts"] + 1 >= max_posts:
                         summary["new_posts"] = max_posts

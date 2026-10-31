@@ -9,6 +9,7 @@ State-machine: stopped → running ⇄ paused → stopped.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -24,6 +25,23 @@ from .util import now_iso, sanitize_stem
 log = logging.getLogger("rmm.engine")
 
 SPEED_WINDOW = 10.0  # seconden voor de snelheidsberekening
+
+
+def _parse_candidates(raw) -> list[str] | None:
+    """Kandidaat-URL's uit de rij (JSON of lijst) → list[str]; onjuist/leeg → None."""
+    if not raw:
+        return None
+    if isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        try:
+            items = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(items, list):
+            return None
+    out = [str(x).strip() for x in items if str(x).strip()]
+    return out or None
 
 
 class Engine:
@@ -244,16 +262,24 @@ class Engine:
                 dest = os.path.join(directory, f"{stem[:60]}_{post_id}.{ext}")
 
         # 2) Download (met pauze-check per chunk + snelheidsmeting + bytes_done in DB).
-        def on_bytes(n: int) -> None:
-            self.record_bytes(n)
+        # on_bytes(total) = cumulatieve bytes; record_bytes krijgt de delta (snelheid).
+        _prog = {"last": 0}
+        def on_bytes(total: int) -> None:
+            delta = total - _prog["last"]
+            _prog["last"] = total
+            if delta > 0:
+                self.record_bytes(delta)
             try:
                 import asyncio as _a
-                _a.get_running_loop().create_task(self._set_bytes_done(row["id"], n))
+                _a.get_running_loop().create_task(self._set_bytes_done(row["id"], total))
             except RuntimeError:
                 pass
 
-        sha, size = await self.downloader.download(url, dest, self._should_pause, on_bytes)
-        log.info("Gedownload %s (%.1f KB) → %s", url, size / 1024, dest)
+        # Kandidaat-URL's (full-res eerst): uit de rij (JSON) of fallback op [url].
+        cands = _parse_candidates(row.get("candidates")) or [url]
+
+        sha, size = await self.downloader.download(cands, dest, self._should_pause, on_bytes)
+        log.info("Gedownload %s (%.1f KB) → %s", cands[0], size / 1024, dest)
 
         # 3) Deduplicatie op sha256: identiek bestand bestaat al → weghalen + skip.
         dup_sha = await self.db.one(
@@ -301,9 +327,15 @@ class Engine:
         except Exception as e:  # noqa: BLE001 — conversie mag de download niet verpesten
             log.warning("Onverwacht conversiefout (%s) — behoud origineel: %s", e, dest)
 
+        # Autoritatieve bytes_done = echte bestandsgrootte (post-conversie) van disk.
+        try:
+            final_bytes = os.path.getsize(dest)
+        except OSError:
+            final_bytes = int(size or 0)
         await self.db.execute(
-            "UPDATE downloads SET status = 'done', sha256 = ?, local_path = ?, downloaded_at = ?, error = NULL WHERE id = ?",
-            (sha, dest, now_iso(), row["id"]),
+            "UPDATE downloads SET status = 'done', sha256 = ?, local_path = ?, downloaded_at = ?, "
+            "error = NULL, bytes_done = ? WHERE id = ?",
+            (sha, dest, now_iso(), final_bytes, row["id"]),
         )
 
     # -- handmatige acties ----------------------------------------------------------

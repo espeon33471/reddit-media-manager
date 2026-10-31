@@ -607,11 +607,34 @@ async def api_media(
         params.extend([f"%{e}" for e in exts])
 
     sql = (
-        "SELECT local_path, sub, post_id, post_date, url, downloaded_at, post_title, post_author "
+        "SELECT local_path, sub, post_id, post_date, url, downloaded_at, post_title, post_author, bytes_done "
         f"FROM downloads WHERE {base_where}{where_extra} "
         "ORDER BY downloaded_at DESC LIMIT ? OFFSET ?"
     )
     rows = await state.db.query(sql, tuple(params + [limit, offset]))
+
+    # `media_type` afleiden uit de extensie, zodat de galerij video's/gif's
+    # als <video> rendert in plaats van als (kapotte) <img>.
+    ext_to_type = {ext: t for t, exts in ext_map.items() for ext in exts}
+    # Echte bestandsgrootte van disk (authoritatief) — lost de oude (throttléde)
+    # bytes_done-waarden retroactief op voor reeds gedownloade items.
+    base = Path(resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))).resolve()
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        r = dict(r)
+        lp = r.get("local_path") or ""
+        ext = Path(lp).suffix.lower()
+        r["media_type"] = ext_to_type.get(ext, "photo")
+        size = int(r.get("bytes_done") or 0)
+        if lp:
+            target = (base / lp).resolve()
+            if target.is_relative_to(base) and target.is_file():
+                try:
+                    size = target.stat().st_size
+                except OSError:
+                    pass
+        r["size"] = size
+        items.append(r)
 
     count_sql = f"SELECT COUNT(*) AS c FROM downloads WHERE {base_where}{where_extra}"
     total_row = await state.db.one(count_sql, tuple(params))
@@ -620,7 +643,7 @@ async def api_media(
     sub_rows = await state.db.query(
         f"SELECT DISTINCT sub FROM downloads WHERE {base_where} ORDER BY sub"
     )
-    return {"items": rows, "total": total, "subs": [r["sub"] for r in sub_rows]}
+    return {"items": items, "total": total, "subs": [r["sub"] for r in sub_rows]}
 
 
 @app.get("/media/{path:path}")

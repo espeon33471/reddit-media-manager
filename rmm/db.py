@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS downloads (
   post_date     TEXT,
   post_title    TEXT,
   post_author   TEXT,
-  bytes_done    INTEGER NOT NULL DEFAULT 0
+  bytes_done    INTEGER NOT NULL DEFAULT 0,
+  candidates    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dl_url    ON downloads(url);
 CREATE INDEX IF NOT EXISTS idx_dl_sha    ON downloads(sha256);
@@ -73,6 +74,7 @@ class DB:
             ("post_title", "ALTER TABLE downloads ADD COLUMN post_title TEXT"),
             ("post_author", "ALTER TABLE downloads ADD COLUMN post_author TEXT"),
             ("bytes_done", "ALTER TABLE downloads ADD COLUMN bytes_done INTEGER NOT NULL DEFAULT 0"),
+            ("candidates", "ALTER TABLE downloads ADD COLUMN candidates TEXT"),
         ):
             try:
                 await self.conn.execute(ddl)

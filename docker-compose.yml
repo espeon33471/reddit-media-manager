@@ -1,6 +1,6 @@
 services:
   reddit-media-manager:
-    image: ghcr.io/espeon33471/reddit-media-manager:latest
+    image: rmm:latest
     build: .
     container_name: reddit-media-manager
     ports:
