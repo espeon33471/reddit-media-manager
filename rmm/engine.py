@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 from collections import deque
 from typing import Any, Optional
@@ -25,6 +26,7 @@ from .util import now_iso, sanitize_stem
 log = logging.getLogger("rmm.engine")
 
 SPEED_WINDOW = 10.0  # seconden voor de snelheidsberekening
+MAX_REQUEUE = 5  # max. extra herpogingen van transi\u00ebnte fouten (403/429/netwerk)
 
 
 def _parse_candidates(raw) -> list[str] | None:
@@ -129,6 +131,11 @@ class Engine:
         }
 
     # -- worker ------------------------------------------------------------------
+    def _requeue_delay(self, rc: int) -> float:
+        """Exponenti\u00eble backoff + jitter voor het opnieuw proberen van transi\u00ebnte fouten."""
+        base = min(120 * (rc + 1), 1200)
+        return base * (0.8 + random.random() * 0.4)
+
     async def _worker(self, idx: int) -> None:
         log_ = logging.getLogger(f"rmm.worker{idx}")
         while True:
@@ -152,6 +159,26 @@ class Engine:
             except asyncio.CancelledError:
                 await self._revert(row["id"])
                 raise
+            except DownloadError as exc:  # transi\u00ebnt? → herproberen i.p.v. permanent mislukt
+                msg = str(exc)[:400]
+                if getattr(exc, "transient", False) and (row.get("retry_count") or 0) < MAX_REQUEUE:
+                    rc = (row.get("retry_count") or 0) + 1
+                    delay = self._requeue_delay(rc - 1)
+                    await self.db.execute(
+                        "UPDATE downloads SET status = 'pending', retry_count = ?, next_retry_at = ?, "
+                        "error = ? WHERE id = ?",
+                        (rc, time.time() + delay, f"tijdelijk ({msg}) — opnieuw over {delay:.0f}s", row["id"]),
+                    )
+                    log_.warning("Item %d (%s/%s) tijdelijk mislukt (herpoging %d/%d over %.0fs): %s",
+                                row["id"], row["sub"], row["post_id"], rc, MAX_REQUEUE, delay, msg)
+                    self.errors.append({"at": now_iso(), "msg": f"{row['sub']}/{row['post_id']}: herpoging {rc}/{MAX_REQUEUE} — {msg}"})
+                    continue
+                # niet-transi\u00ebnt of cap bereikt → definitief mislukt
+                log_.exception("Item %d (%s/%s) gefaald: %s", row["id"], row["sub"], row["post_id"], msg)
+                await self.db.execute(
+                    "UPDATE downloads SET status = 'failed', error = ? WHERE id = ?", (msg, row["id"])
+                )
+                self.errors.append({"at": now_iso(), "msg": f"{row['sub']}/{row['post_id']}: {msg}"})
             except Exception as exc:  # noqa: BLE001 — worker mag nooit dood
                 msg = str(exc)[:400]
                 log_.exception("Item %d (%s/%s) gefaald: %s", row["id"], row["sub"], row["post_id"], msg)
@@ -171,7 +198,10 @@ class Engine:
 
     async def _claim_next(self) -> Optional[dict[str, Any]]:
         row = await self.db.one(
-            "SELECT id FROM downloads WHERE status = 'pending' ORDER BY id LIMIT 1"
+            "SELECT id FROM downloads "
+            "WHERE status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= ?) "
+            "ORDER BY COALESCE(next_retry_at, 0) ASC, id ASC LIMIT 1",
+            (time.time(),),
         )
         if row is None:
             return None
@@ -355,7 +385,8 @@ class Engine:
 
     async def redownload(self, sub: str | None = None) -> int:
         """Zet `done`-items terug op `pending` (her-download, hoogste resolutie)."""
-        sql = "UPDATE downloads SET status = 'pending', error = NULL, local_path = NULL WHERE status = 'done'"
+        sql = ("UPDATE downloads SET status = 'pending', error = NULL, local_path = NULL, "
+               "retry_count = 0, next_retry_at = NULL WHERE status = 'done'")
         params: tuple = ()
         if sub:
             sql += " AND sub = ?"
@@ -374,7 +405,8 @@ class Engine:
         if row is None:
             return False
         await self.db.execute(
-            "UPDATE downloads SET status = 'pending', error = NULL WHERE id = ?", (item_id,)
+            "UPDATE downloads SET status = 'pending', error = NULL, retry_count = 0, next_retry_at = NULL "
+            "WHERE id = ?", (item_id,)
         )
         if self.state == "stopped":
             await self.start()

@@ -24,6 +24,9 @@ DEFAULTS: dict[str, Any] = {
     "dataroot": DEFAULT_DATAROOT,
     "concurrency": int(os.environ.get("RMM_CONCURRENCY", "4")),
     "request_interval": float(os.environ.get("RMM_REQUEST_INTERVAL", "6.0")),
+    # Minimale pauze (sec) tussen het *starten* van nieuwe downloads over alle
+    # workers heen — dempt de initieele burst zodat de CDN minder snel 429 geeft.
+    "download_spacing": float(os.environ.get("RMM_DOWNLOAD_SPACING", "0.7")),
     "user_agent": os.environ.get(
         "RMM_USER_AGENT",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

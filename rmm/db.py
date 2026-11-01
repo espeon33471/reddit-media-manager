@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS downloads (
   post_title    TEXT,
   post_author   TEXT,
   bytes_done    INTEGER NOT NULL DEFAULT 0,
-  candidates    TEXT
+  candidates    TEXT,
+  retry_count   INTEGER NOT NULL DEFAULT 0,
+  next_retry_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_dl_url    ON downloads(url);
 CREATE INDEX IF NOT EXISTS idx_dl_sha    ON downloads(sha256);
@@ -76,6 +78,8 @@ class DB:
             ("post_author", "ALTER TABLE downloads ADD COLUMN post_author TEXT"),
             ("bytes_done", "ALTER TABLE downloads ADD COLUMN bytes_done INTEGER NOT NULL DEFAULT 0"),
             ("candidates", "ALTER TABLE downloads ADD COLUMN candidates TEXT"),
+            ("retry_count", "ALTER TABLE downloads ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"),
+            ("next_retry_at", "ALTER TABLE downloads ADD COLUMN next_retry_at REAL"),
             ("auto_sync", "ALTER TABLE subs ADD COLUMN auto_sync INTEGER NOT NULL DEFAULT 0"),
         ):
             try:

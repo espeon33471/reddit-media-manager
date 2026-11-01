@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import random
 from typing import Any, Callable
 
 import httpx
@@ -30,7 +31,9 @@ HARD_STATUS = {401, 404, 410}
 
 
 class DownloadError(Exception):
-    pass
+    def __init__(self, msg: str, transient: bool = False):
+        self.transient = transient
+        super().__init__(msg)
 
 
 class HardHTTPError(DownloadError):
@@ -53,28 +56,68 @@ class MediaDownloader:
             timeout=httpx.Timeout(180.0, connect=20.0),
             follow_redirects=True,
         )
+        # Globale start-spacing over alle workers heen (dempt de initieele burst).
+        self._spacing = max(0.0, float(settings.get("download_spacing", 0.7)))
+        self._space_lock = asyncio.Lock()
+        self._last_start = 0.0
 
     _BROWSER_UA = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     )
 
+    _REDDIT_HOSTS = ("redd.it", "reddit.com", "redditvideo.com", "redditmedia.com", "redditstatic.com")
+
+    def _ua(self) -> str:
+        """Gebruik de ingestelde UA alleen als die écht browser-achtig is; anders
+        de ingebouwde browser-UA — zodat we nooit `rmm/1.0` sturen (die krijgt
+        direct een 403 van de Reddit-CDN)."""
+        ua = (self.settings.get("user_agent") or "").strip()
+        return ua if "mozilla" in ua.lower() else self._BROWSER_UA
+
+    @staticmethod
+    def _host(url: str) -> str:
+        return (url or "").split("://", 1)[-1].split("/", 1)[0].lower()
+
+    def _is_reddit_host(self, url: str) -> bool:
+        host = self._host(url)
+        return any(host == h or host.endswith("." + h) for h in self._REDDIT_HOSTS)
+
     def _headers_for(self, url: str) -> dict[str, str]:
         """Headers per doel-host. Externe video-hosts (RedGifs/Gifer) krijgen een
-        browser-UA + matching referer (getest werkend); Reddit-CDN's de ingestelde
-        UA + reddit-referer."""
-        host = (url or "").split("://", 1)[-1].split("/", 1)[0].lower()
+        browser-UA + matching referer; Reddit-CDN's een browser-UA + reddit-referer
+        (altijd browser-UA, onafhankelijk van de ingestelde setting)."""
+        host = self._host(url)
+        ua = self._ua()
         if "redgifs.com" in host or "gifer.com" in host:
             ref = "https://www.redgifs.com/" if "redgifs" in host else "https://www.gifer.com/"
-            return {"User-Agent": self._BROWSER_UA, "Referer": ref, "Accept": "*/*"}
-        return {
-            "User-Agent": self.settings.get("user_agent", "rmm/1.0"),
-            "Referer": "https://www.reddit.com/",
-            "Accept": "*/*",
-        }
+            return {"User-Agent": ua, "Referer": ref, "Accept": "*/*"}
+        if self._is_reddit_host(url):
+            return {
+                "User-Agent": ua,
+                "Referer": "https://www.reddit.com/",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+        # Overige externe hosts: browser-UA, zonder misleidende referer.
+        return {"User-Agent": ua, "Accept": "*/*"}
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def _acquire_start_slot(self) -> None:
+        """Zorgt dat over alle workers heen minstens `download_spacing` sec tussen
+        het *starten* van twee downloads zit — dempt de initieele burst die de CDN
+        anders snel in een 429-rate-limit duwt."""
+        if self._spacing <= 0:
+            return
+        loop = asyncio.get_event_loop()
+        async with self._space_lock:
+            now = loop.time()
+            wait = self._last_start + self._spacing - now
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_start = loop.time()
 
     async def download(
         self,
@@ -97,6 +140,7 @@ class MediaDownloader:
         os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
 
         last_err: Exception | None = None
+        last_transient = False
         for cand in candidates:
             if should_pause():
                 _remove_quiet(dest_path + ".part")
@@ -107,14 +151,18 @@ class MediaDownloader:
                 raise
             except HardHTTPError as exc:
                 last_err = exc
+                last_transient = False
                 log.info("Kandidaat %s → %s; probeer volgende", cand, exc)
                 continue
             except DownloadError as exc:
                 last_err = exc
+                last_transient = bool(getattr(exc, "transient", False))
                 log.warning("Kandidaat %s mislukt (%s); probeer volgende", cand, exc)
                 continue
 
-        raise DownloadError(f"Alle kandidaat-URL's mislukt (laatste: {last_err})")
+        raise DownloadError(
+            f"Alle kandidaat-URL's mislukt (laatste: {last_err})", transient=last_transient
+        )
 
     async def _download_one(
         self,
@@ -132,6 +180,8 @@ class MediaDownloader:
                 _remove_quiet(tmp_path)
                 raise PausedError()
 
+            await self._acquire_start_slot()
+
             sha = hashlib.sha256()
             total = 0
             resp = None
@@ -142,14 +192,23 @@ class MediaDownloader:
                     raise HardHTTPError(resp.status_code, url)
                 if resp.status_code >= 400:
                     # 403/429/5xx → transiënt, retry binnen deze kandidaat.
-                    # 403/429 = vaak rate-limiting → langer wachten.
+                    # 403/429 = vaak rate-limiting → langer wachten, respecteer
+                    # Retry-After als de server die stuurt, en voeg jitter toe
+                    # zodat workers niet tegelijk terugkomen (thundering herd).
                     last_error = DownloadError(f"HTTP {resp.status_code} bij download van {url}")
                     _remove_quiet(tmp_path)
                     if attempt == MAX_ATTEMPTS:
                         break
                     base = 3 if resp.status_code in (403, 429) else 1
-                    wait = min(2 ** attempt * base, 30)
-                    log.warning("HTTP %d (poging %d/%d) %s — wacht %ds",
+                    wait = min(2 ** attempt * base, 60)
+                    ra = resp.headers.get("Retry-After")
+                    if ra:
+                        try:
+                            wait = max(wait, min(float(ra), 120))
+                        except (TypeError, ValueError):
+                            pass
+                    wait = max(0.5, wait * (0.8 + random.random() * 0.4))  # jitter ±20%
+                    log.warning("HTTP %d (poging %d/%d) %s — wacht %.1fs",
                                 resp.status_code, attempt, MAX_ATTEMPTS, url, wait)
                     await asyncio.sleep(wait)
                     continue
@@ -170,7 +229,7 @@ class MediaDownloader:
                     last_error = DownloadError("lege response (0 bytes)")
                     if attempt == MAX_ATTEMPTS:
                         break
-                    await asyncio.sleep(min(2 ** attempt, 10))
+                    await asyncio.sleep(min(2 ** attempt, 10) * (0.8 + random.random() * 0.4))
                     continue
 
                 os.replace(tmp_path, dest_path)
@@ -187,8 +246,8 @@ class MediaDownloader:
                 _remove_quiet(tmp_path)
                 if attempt == MAX_ATTEMPTS:
                     break
-                wait = min(2 ** attempt, 15)
-                log.warning("Download fout (poging %d/%d) %s: %s — wacht %ds",
+                wait = min(2 ** attempt, 15) * (0.8 + random.random() * 0.4)
+                log.warning("Download fout (poging %d/%d) %s: %s — wacht %.1fs",
                             attempt, MAX_ATTEMPTS, url, exc, wait)
                 await asyncio.sleep(wait)
             finally:
@@ -198,7 +257,11 @@ class MediaDownloader:
                     except httpx.HTTPError:
                         pass
 
-        raise DownloadError(f"Download mislukt na {MAX_ATTEMPTS} pogingen: {last_error}")
+        # Alles hier is transiënt (403/429/5xx/netwerk/leeg) → geef de engine
+        # door dat we later opnieuw mogen proberen i.p.v. permanent mislukt.
+        raise DownloadError(
+            f"Download mislukt na {MAX_ATTEMPTS} pogingen: {last_error}", transient=True
+        )
 
     async def content_type_for(self, url: str) -> str | None:
         """HEAD/GET met directe afsluit voor extensie-giswerk; mag falen."""
