@@ -59,18 +59,22 @@ h2 { font-size: 1.05rem; margin: 1.4rem 0 0.6rem; }
   border-radius: 12px;
   padding: 1rem 1.2rem;
   margin-bottom: 1.1rem;
+  overflow-x: auto;
 }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .row { display: flex; gap: 0.7rem; align-items: center; flex-wrap: wrap; }
 .spread { justify-content: space-between; }
 
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
-th { color: var(--muted); font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.03em; }
+table { width: 100%; border-collapse: collapse; min-width: 720px; }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: anywhere; }
+th, td { white-space: nowrap; }
+th:has(.small), td:has(.row) { white-space: normal; }
+th { color: var(--muted); font-weight: 600; font-size: 0.85rem; letter-spacing: 0.03em; text-transform: uppercase; }
 tr:last-child td { border-bottom: none; }
 td.num, th.num { text-align: right; }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; }
 .small { font-size: 0.85rem; color: var(--muted); }
-.clamp { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clamp { max-width: min(340px, 38vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }
 
 .badge {
   display: inline-block;
