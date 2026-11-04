@@ -14,7 +14,13 @@ NSFW/age-gated en private subreddits worden ondersteund via je eigen Reddit-sess
 - **Vlakke opslag**: `<dataroot>/u_<subreddit>/<bestand>`, optioneel maand-submappen of per-post mappen met `meta.json`
 - **Deduplicatie op 3 niveaus**: post-id, URL én sha256-inhoud (ook tussen subreddits)
 - **Web UI** met tabs: Dashboard, Subreddits, Queue, History, Galerij (met preview) en Settings
-- **Auto-sync** (optioneel: elke X minuten)
+- **Auto-sync**: globaal (elke X minuten) én **per subreddit** eigen interval, met keuze welke subs meedoen
+- **Per-subreddit filters**: minimum-score en alleen-NSFW
+- **Queue-filters**: filter op status (Alles / 404 / Rate-limited / Andere)
+- **Export**: complete history/queue exporteren als **CSV of JSON** (optioneel per subreddit)
+- **Galerij massaal beheren**: items selecteren en in één keer **verwijderen** (optioneel bestanden op schijf behouden) of **verplaatsen** naar een andere subreddit
+- **Galerij-thumbnails**: foto's laden als compacte thumbnails (max. 400 px), lightbox toont altijd het origineel
+- **Bandbreedte-limiet**: maximale download-snelheid (MB/s), 0 = onbeperkt
 - **Vriendelijke rate-limiting**: 6 s tussen API-aanroepen, concurrentie 4, backoff bij 429/503
 
 ---
@@ -129,20 +135,28 @@ Tabs: **Dashboard · Subreddits · Queue · History · Galerij · Settings**.
      `.txt`/`.csv`-bestand. `r/`-prefixen en `reddit.com/r/…`-URL's worden herkend.
    - **Detecteer gesubscribed**: haalt je aangesloten subreddits op (ook NSFW/private).
    - Per sub instellen: **enable/disable**, **max posts** (`0` = alles),
-     **voorbij datum** (laat oudere posts over), **sorteer** (`new`/`top`/`hot`).
+     **voorbij datum** (laat oudere posts over), **sorteer** (`new`/`top`/`hot`),
+     **min-score** (posts onder die score worden overgeslagen), **alleen NSFW**,
+     en **auto-sync** (aan/uit + interval in minuten).
    - Acties per sub:
      - **Sync** — alleen nieuwe posts scannen en in de wachtrij zetten;
      - **Download nu** — sync + workers direct starten;
      - **Resync** — opnieuw scannen vanaf het begin (duplicaten blijven uit).
 2. **Queue**: live lijst (auto-vernieuwing), per item status, pogingen en
-   foutmelding; **Opnieuw** voor failed/skipped items.
+   foutmelding; **filteren op fouttype** (Alles / 404 / Rate-limited / Andere);
+   **Opnieuw** voor failed/skipped items.
 3. **History**: gedownloade posts per sub/datum met aantal bestanden;
    filteren op sub; kolommen sorteerbaar; entries verwijderen (bestanden blijven staan).
 4. **Galerij**: grid-preview van alle gedownloade media met sub/type-filter
-   en click-to-voorbekijk (afbeeldingen, GIFs en video's).
+   en click-to-voorbekijk (afbeeldingen, GIFs en video's). Foto's laden als
+   snelle thumbnails; de lightbox toont het originele bestand.
+   - **Massaal beheren**: items selecteren met checkboxes en in één keer
+     **verwijderen** (met optie om bestanden op schijf te behouden) of
+     **verplaatsen** naar een andere subreddit.
 5. **Settings**: alle instellingen (zie tabel hieronder) + sessie-cookie.
 6. **Dashboard**: status, counters per queue-status, download-snelheid en
-   recente fouten; globale **Start / Pauzeer / Hervat / Stop**.
+   recente fouten; globale **Start / Pauzeer / Hervat / Stop**; knop om de
+   complete lijst te **exporteren als CSV of JSON**.
 
 ### Gedrag pauze/resume/stop
 
@@ -245,7 +259,23 @@ Database `state.db` in de configmap (in Docker: `/config/state.db`). Tabellen:
 | `date_subfolder` | `none` | `none` of `month` |
 | `photo_quality` | `95` | JPEG-kwaliteit (1–100) |
 | `video_quality` | `18` | CRF (lager = beter) |
-| `auto_sync_minutes` | `0` (uit) | Automatisch syncen elke X minuten |
+| `max_bandwidth_mb` | `0` (uit) | Max. download-snelheid in MB/s (0 = onbeperkt) |
+| `auto_sync_minutes` | `0` (uit) | Globale auto-sync elke X minuten |
+
+Per subreddit (Subreddits-tab): `auto_sync` (aan/uit), `auto_sync_minutes`,
+`min_score` en `nsfw_only`.
+
+## API (extra endpoints)
+
+Naast de interne app-API staan deze handige endpoints beschikbaar (optioneel, bv. voor scripts):
+
+| Endpoint | Omschrijving |
+|---|---|
+| `GET /api/export?format=csv\|json&sub=<naam>` | Complete queue/history exporteren (optioneel één subreddit) |
+| `GET /api/media/thumbnail?path=<relatief_pad>` | Compacte thumbnail (max. 400 px, JPEG) van een foto |
+| `POST /api/gallery/delete` | Body `{"ids": [1, 2], "keep_files": true}` — galerij-rijen verwijderen (bestanden alleen weg als geen andere rij ze deelt) |
+| `POST /api/gallery/move` | Body `{"ids": [1, 2], "target_sub": "naam"}` — items verplaatsen naar een andere subreddit (bestanden worden nooit overschreven) |
+| `GET /healthz` | Healthcheck (ook gebruikt door de Docker-healthcheck) |
 
 ## Logging
 

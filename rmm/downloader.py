@@ -60,6 +60,12 @@ class MediaDownloader:
         self._spacing = max(0.0, float(settings.get("download_spacing", 0.7)))
         self._space_lock = asyncio.Lock()
         self._last_start = 0.0
+        # Optionele bandbreedte-limiet (MB/s → bytes/sec; 0 = onbeperkt).
+        try:
+            bw_mb = float(settings.get("max_bandwidth_mb", 0) or 0)
+        except (TypeError, ValueError):
+            bw_mb = 0.0
+        self._bw_bytes_per_sec = max(0.0, bw_mb) * 1024 * 1024
 
     _BROWSER_UA = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -104,6 +110,13 @@ class MediaDownloader:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def _throttle(self, nbytes: int) -> None:
+        """Pas de download-snelheid aan op de ingestelde bandbreedte-limiet (MB/s).
+        0 = onbeperkt (geen await)."""
+        if self._bw_bytes_per_sec <= 0 or nbytes <= 0:
+            return
+        await asyncio.sleep(nbytes / self._bw_bytes_per_sec)
 
     async def _acquire_start_slot(self) -> None:
         """Zorgt dat over alle workers heen minstens `download_spacing` sec tussen
@@ -222,6 +235,7 @@ class MediaDownloader:
                         total += len(chunk)
                         if on_bytes:
                             on_bytes(total)
+                        await self._throttle(len(chunk))
 
                 # Lege response (0 bytes) → probeer opnieuw, anders mislukt.
                 if total == 0:

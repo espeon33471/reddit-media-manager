@@ -68,22 +68,29 @@ class SyncService:
 
     async def update_sub(self, sub: str, *, enabled: bool | None = None, max_posts: int | None = None,
                          date_from: str | None = None, sort: str | None = None,
-                         auto_sync: bool | None = None) -> dict[str, Any]:
+                         auto_sync: bool | None = None, min_score: int | None = None,
+                         nsfw_only: bool | None = None,
+                         auto_sync_minutes: int | None = None) -> dict[str, Any]:
         sub = sanitize_sub(sub)
         row = await self.db.one("SELECT * FROM subs WHERE sub = ?", (sub,))
         if row is None:
             raise ValueError(f"Subreddit '{sub}' staat niet in de lijst.")
         enabled = row["enabled"] if enabled is None else (1 if enabled else 0)
         auto_sync = row["auto_sync"] if auto_sync is None else (1 if auto_sync else 0)
+        nsfw_only = row["nsfw_only"] if nsfw_only is None else (1 if nsfw_only else 0)
         if max_posts is not None:
             max_posts = max(0, int(max_posts))
         date_from = row["date_from"] if date_from is None else (date_from or "").strip()
         sort = (sort or row["sort"]).lower()
         if sort not in SORTS:
             sort = "new"
+        if min_score is not None:
+            min_score = max(0, int(min_score))
+        auto_sync_minutes = row["auto_sync_minutes"] if auto_sync_minutes is None else max(0, int(auto_sync_minutes))
         await self.db.execute(
-            "UPDATE subs SET enabled = ?, max_posts = ?, date_from = ?, sort = ?, auto_sync = ? WHERE sub = ?",
-            (enabled, max_posts, date_from, sort, auto_sync, sub),
+            "UPDATE subs SET enabled = ?, max_posts = ?, date_from = ?, sort = ?, auto_sync = ?, "
+            "min_score = ?, nsfw_only = ?, auto_sync_minutes = ? WHERE sub = ?",
+            (enabled, max_posts, date_from, sort, auto_sync, min_score, nsfw_only, auto_sync_minutes, sub),
         )
         return await self.get_sub(sub)  # type: ignore[return-value]
 
@@ -128,6 +135,8 @@ class SyncService:
         sort = sub_row["sort"] or "new"
         max_posts = sub_row["max_posts"] or 0
         date_from_ts = _parse_date_from(sub_row["date_from"])
+        min_score = sub_row.get("min_score")
+        nsfw_only = bool(sub_row.get("nsfw_only"))
 
         cursor: str | None = None
         if mode == "new":
@@ -182,6 +191,27 @@ class SyncService:
                         await self.db.execute(
                             "INSERT INTO downloads(sub, post_id, url, status, error) "
                             "VALUES (?, ?, '', 'skipped', 'ouder dan date_from')",
+                            (sub, post_id),
+                        )
+                        continue
+
+                    # Score-filter: posts onder de ingestelde minimum-score overslaan.
+                    if min_score is not None and int(data.get("score") or 0) < int(min_score):
+                        summary["empty_posts"] += 1
+                        await self.db.execute(
+                            "INSERT INTO downloads(sub, post_id, url, status, error) "
+                            "VALUES (?, ?, '', 'skipped', 'onder minimum-score')",
+                            (sub, post_id),
+                        )
+                        continue
+
+                    # NSFW-filter: alleen NSFW-posts (of alleen niet-NSFW) behouden.
+                    is_nsfw = bool(data.get("over_18") or data.get("nsfw"))
+                    if nsfw_only and not is_nsfw:
+                        summary["empty_posts"] += 1
+                        await self.db.execute(
+                            "INSERT INTO downloads(sub, post_id, url, status, error) "
+                            "VALUES (?, ?, '', 'skipped', 'niet-NSFW (nsfw_only staat aan)')",
                             (sub, post_id),
                         )
                         continue

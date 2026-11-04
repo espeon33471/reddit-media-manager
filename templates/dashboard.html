@@ -26,6 +26,17 @@
   <div class="stat"><div class="v" id="st-speed">…</div><div class="k">Snelheid</div></div>
 </div>
 
+<div class="panel">
+  <div class="row spread">
+    <h2 style="margin:0">Export</h2>
+    <div class="row">
+      <a class="button primary" href="/api/export?format=csv" download>Export CSV</a>
+      <a class="button" href="/api/export?format=json" download>Export JSON</a>
+    </div>
+  </div>
+  <p class="small" style="margin-bottom:0">Exporteert alle gedownloade bestanden (optioneel per subreddit via <span class="mono">?sub=naam</span>). CSV- en JSON-bestanden met post-titel, subreddit, auteur, datum, type en bestandspad.</p>
+</div>
+
 <h2>Recente fouten</h2>
 <div class="panel">
   <ul class="errors-list" id="errors-list"><li class="small">Geen fouten gemeld.</li></ul>

@@ -51,7 +51,10 @@ CREATE TABLE IF NOT EXISTS subs (
   max_posts INTEGER NOT NULL DEFAULT 0,
   date_from TEXT,
   sort      TEXT    NOT NULL DEFAULT 'new',
-  auto_sync INTEGER NOT NULL DEFAULT 0
+  auto_sync INTEGER NOT NULL DEFAULT 0,
+  auto_sync_minutes INTEGER,
+  min_score INTEGER,
+  nsfw_only INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -81,6 +84,10 @@ class DB:
             ("retry_count", "ALTER TABLE downloads ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"),
             ("next_retry_at", "ALTER TABLE downloads ADD COLUMN next_retry_at REAL"),
             ("auto_sync", "ALTER TABLE subs ADD COLUMN auto_sync INTEGER NOT NULL DEFAULT 0"),
+            ("auto_sync_minutes", "ALTER TABLE subs ADD COLUMN auto_sync_minutes INTEGER"),
+            ("min_score", "ALTER TABLE subs ADD COLUMN min_score INTEGER"),
+            ("nsfw_only", "ALTER TABLE subs ADD COLUMN nsfw_only INTEGER NOT NULL DEFAULT 0"),
+            ("last_auto_sync", "ALTER TABLE sub_state ADD COLUMN last_auto_sync REAL"),
         ):
             try:
                 await self.conn.execute(ddl)

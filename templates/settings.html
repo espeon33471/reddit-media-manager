@@ -18,6 +18,10 @@
       <span class="lbl">Min. seconde(n) tussen Reddit-API-aanroepen (~10/min = 6.0)</span>
       <input type="number" id="set-request_interval" min="0.5" max="60" step="0.5" placeholder="6.0">
     </label>
+    <label class="field">
+      <span class="lbl">Max. downloadbandbreedte (MB/s, 0 = onbeperkt)</span>
+      <input type="number" id="set-max_bandwidth_mb" min="0" max="10000" placeholder="0">
+    </label>
   </div>
 
   <div class="panel">
@@ -148,7 +152,7 @@
   async function loadSettings() {
     try {
       const { settings, autosync } = await RMM.api("/api/settings");
-      for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality"]) {
+      for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality", "max_bandwidth_mb"]) {
         const el = document.getElementById("set-" + k);
         if (el) el.value = (settings[k] ?? "");
       }
@@ -229,7 +233,7 @@
 
   document.getElementById("save-settings").onclick = async () => {
     const payload = {};
-    for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality"]) {
+    for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality", "max_bandwidth_mb"]) {
       const el = document.getElementById("set-" + k);
       if (el) payload[k] = el.value;
     }

@@ -41,6 +41,8 @@ DEFAULTS: dict[str, Any] = {
     "photo_format": "jpeg",
     "video_format": "mp4",
     "gif_mode": "keep",
+    # Maximale download-snelheid in MB/s (0 = onbeperkt)
+    "max_bandwidth_mb": 0,
     # Naming & structure
     "naming_mode": "flat",          # "flat" or "posts"
     "date_subfolder": "none",       # "none" or "month"
@@ -131,6 +133,7 @@ class Config:
     photo_quality: int
     video_quality: int
     auto_sync_minutes: int
+    max_bandwidth_mb: int
 
     @classmethod
     def from_settings(cls) -> "Config":
@@ -152,6 +155,7 @@ class Config:
             photo_quality=int(s.get("photo_quality", 95)),
             video_quality=int(s.get("video_quality", 18)),
             auto_sync_minutes=int(s.get("auto_sync_minutes", 0)),
+            max_bandwidth_mb=int(s.get("max_bandwidth_mb", 0) or 0),
         )
 
     def as_dict(self) -> dict[str, Any]:

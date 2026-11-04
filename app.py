@@ -7,6 +7,8 @@ Start:
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import logging
 import mimetypes
 import re
@@ -17,7 +19,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -79,37 +81,51 @@ async def autosync_loop() -> None:
     while True:
         await asyncio.sleep(20)
         try:
-            mins = int(state.settings.get("auto_sync_minutes", 0) or 0)
-            if mins <= 0:
-                continue
             if state.engine is None or state.sync is None:
                 continue
-            # Interval daadwerkelijk afdwingen (minimaal 1 minuut).
-            interval_s = max(60, mins * 60)
+            global_mins = int(state.settings.get("auto_sync_minutes", 0) or 0)
             now = time.time()
-            if now - state.autosync_last_run < interval_s:
-                continue
-            subs = await state.db.query(
-                "SELECT sub FROM subs WHERE enabled = 1 AND auto_sync = 1 ORDER BY sub"
+            rows = await state.db.query(
+                "SELECT sub, auto_sync_minutes FROM subs WHERE enabled = 1 AND auto_sync = 1 ORDER BY sub"
             )
-            if not subs:
+            if not rows:
                 continue
-            # Eerst 'nu' noteren, daarna werk doen (voorkomt dubbele runs).
-            state.autosync_last_run = now
+            # Per-sub interval heeft voorrang; 0/leeg = gebruik het globale interval.
+            due: list[str] = []
+            for row in rows:
+                mins = int(row["auto_sync_minutes"] or 0) or global_mins
+                if mins <= 0:
+                    continue
+                interval_s = max(60, mins * 60)
+                last_row = await state.db.one(
+                    "SELECT last_auto_sync FROM sub_state WHERE sub = ?", (row["sub"],)
+                )
+                last = float(last_row["last_auto_sync"] or 0) if last_row else 0.0
+                if now - last >= interval_s:
+                    due.append(row["sub"])
+            if not due:
+                continue
             total_enqueued = 0
             failed = 0
-            for row in subs:
+            for sub in due:
                 try:
-                    summary = await state.sync.sync_sub(row["sub"], "new")
+                    summary = await state.sync.sync_sub(sub, "new")
+                    # Per-sub timestamp (epoch) — handmatige syncs resetten dit niet.
+                    await state.db.execute(
+                        "INSERT INTO sub_state (sub, last_auto_sync) VALUES (?, ?) "
+                        "ON CONFLICT(sub) DO UPDATE SET last_auto_sync = excluded.last_auto_sync",
+                        (sub, time.time()),
+                    )
                     total_enqueued += int(summary.get("files_enqueued", 0) or 0)
                 except Exception as exc:  # noqa: BLE001 — autosync mag nooit crashen
                     failed += 1
-                    log.warning("Auto-sync %s mislukt: %s", row["sub"], exc)
-            # Start/hervat de engine alleen als hij stilstaat en er nieuw werk is.
+                    log.warning("Auto-sync %s mislukt: %s", sub, exc)
+            # Dashboard-indicator + engine: alleen start/hervat bij nieuw werk.
+            state.autosync_last_run = time.time()
             if total_enqueued > 0 and state.engine.state == "stopped":
                 await state.engine.resume()
-            log.info("Auto-sync: %d subreddits bekeken, %d items ingezet, %d mislukt",
-                     len(subs), total_enqueued, failed)
+            log.info("Auto-sync: %d subreddits gesynct, %d items ingezet, %d mislukt",
+                     len(due), total_enqueued, failed)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -284,6 +300,9 @@ async def api_sub_config(sub: str, payload: dict) -> dict[str, Any]:
             date_from=(payload or {}).get("date_from"),
             sort=(payload or {}).get("sort"),
             auto_sync=(payload or {}).get("auto_sync"),
+            min_score=(payload or {}).get("min_score"),
+            nsfw_only=(payload or {}).get("nsfw_only"),
+            auto_sync_minutes=(payload or {}).get("auto_sync_minutes"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -590,6 +609,90 @@ async def api_dedup_delete(payload: dict) -> dict[str, Any]:
     return {"ok": True, "file_removed": removed}
 
 
+# --------------------------------------------------------------------------- galerij (massa-acties)
+@app.post("/api/gallery/delete")
+async def api_gallery_delete(payload: dict) -> dict[str, Any]:
+    """Verwijder galerij-items; bestanden alleen als geen andere rij ze deelt."""
+    raw_ids = (payload or {}).get("ids") or []
+    try:
+        ids = [int(i) for i in raw_ids if str(i).isdigit()]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="ids moeten getallen zijn") from exc
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids vereist")
+    keep_files = bool((payload or {}).get("keep_files"))
+    base = Path(resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))).resolve()
+    ph = ",".join("?" * len(ids))
+    rows = await state.db.query(
+        f"SELECT id, local_path FROM downloads WHERE id IN ({ph})", tuple(ids)
+    )
+    removed_files = 0
+    if not keep_files:
+        for r in rows:
+            lp = r["local_path"]
+            if not lp:
+                continue
+            target = (base / lp).resolve()
+            if not target.is_relative_to(base) or not target.is_file():
+                continue
+            # Alleen verwijderen als geen andere rij dezelfde local_path deelt.
+            others = await state.db.query(
+                "SELECT id FROM downloads WHERE id != ? AND local_path = ?",
+                (r["id"], lp),
+            )
+            if others:
+                continue
+            try:
+                target.unlink()
+                removed_files += 1
+            except OSError as exc:
+                log.warning("Galerij: bestand verwijderen mislukt (%s): %s", lp, exc)
+    await state.db.execute(f"DELETE FROM downloads WHERE id IN ({ph})", tuple(ids))
+    log.info("Galerij: %d rijen verwijderd, %d bestanden", len(rows), removed_files)
+    return {"ok": True, "removed_rows": len(rows), "files_removed": removed_files}
+
+
+@app.post("/api/gallery/move")
+async def api_gallery_move(payload: dict) -> dict[str, Any]:
+    """Verplaats galerij-items naar een andere (bestaande) subreddit-map."""
+    raw_ids = (payload or {}).get("ids") or []
+    try:
+        ids = [int(i) for i in raw_ids if str(i).isdigit()]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="ids moeten getallen zijn") from exc
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids vereist")
+    target_sub = sanitize_sub((payload or {}).get("target_sub") or "")
+    sub_row = await state.db.one("SELECT sub FROM subs WHERE sub = ?", (target_sub,))
+    if sub_row is None:
+        raise HTTPException(status_code=400, detail=f"Doel-subreddit '{target_sub}' staat niet in de lijst")
+    base = Path(resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))).resolve()
+    ph = ",".join("?" * len(ids))
+    rows = await state.db.query(
+        f"SELECT id, local_path FROM downloads WHERE id IN ({ph})", tuple(ids)
+    )
+    dest_dir = base / target_sub
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for r in rows:
+        lp = r["local_path"]
+        if not lp:
+            continue
+        src = (base / lp).resolve()
+        if not src.is_relative_to(base) or not src.is_file():
+            continue
+        dest = _unique_dest(dest_dir / src.name)
+        shutil.move(str(src), str(dest))
+        new_rel = dest.relative_to(base).as_posix()
+        await state.db.execute(
+            "UPDATE downloads SET sub = ?, local_path = ? WHERE id = ?",
+            (target_sub, new_rel, r["id"]),
+        )
+        moved += 1
+    log.info("Galerij: %d items verplaatst naar %s", moved, target_sub)
+    return {"ok": True, "moved": moved}
+
+
 # --------------------------------------------------------------------------- reddit (cookie-sessie)
 @app.post("/api/reddit/verify")
 async def api_reddit_verify() -> dict[str, Any]:
@@ -687,6 +790,81 @@ async def serve_media(path: str) -> FileResponse:
     return FileResponse(str(target), media_type=mime, filename=target.name)
 
 
+_PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
+
+
+@app.get("/api/media/thumbnail")
+async def api_media_thumbnail(path: str) -> Response:
+    """Kleine JPEG-thumbnail (max 400px) voor de galerij."""
+    from PIL import Image  # lazy import; Pillow is in requirements
+
+    base = Path(resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))).resolve()
+    target = (base / path).resolve()
+    if not target.is_relative_to(base) or not target.is_file():
+        raise HTTPException(status_code=404, detail="Bestand niet gevonden")
+    if target.suffix.lower() not in _PHOTO_EXTS:
+        raise HTTPException(status_code=400, detail="Niet-ondersteund afbeeldingsformaat")
+    try:
+        with Image.open(target) as img:
+            img.thumbnail((400, 400))
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=80)
+    except Exception as exc:  # noqa: BLE001 — corrupte/raare afbeelding → nette fout
+        log.warning("Thumbnail mislukt (%s): %s", path, exc)
+        raise HTTPException(status_code=500, detail="Thumbnail genereren mislukt") from exc
+    return Response(content=buf.getvalue(), media_type="image/jpeg")
+
+
+@app.get("/api/export")
+async def api_export(format: str = "csv", sub: Optional[str] = None):
+    """Exporteer alle gedownloade items als CSV of JSON."""
+    fmt = (format or "csv").lower()
+    if fmt not in ("csv", "json"):
+        raise HTTPException(status_code=400, detail="format moet csv of json zijn")
+    where = "status = 'done'"
+    params: list[Any] = []
+    if sub:
+        where += " AND sub = ?"
+        params.append(sanitize_sub(sub))
+    rows = await state.db.query(
+        "SELECT sub, post_id, post_title, post_author, url, local_path, post_date, "
+        "downloaded_at, status, attempts, bytes_done, error "
+        f"FROM downloads WHERE {where} ORDER BY downloaded_at DESC",
+        tuple(params),
+    )
+    dataroot = resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))
+    fieldnames = ["sub", "post_id", "post_title", "post_author", "url", "local_path",
+                  "post_date", "downloaded_at", "status", "attempts", "bytes", "error"]
+    items = []
+    for r in rows:
+        items.append({
+            "sub": r["sub"], "post_id": r["post_id"], "post_title": r["post_title"],
+            "post_author": r["post_author"], "url": r["url"],
+            "local_path": _relpath(dataroot, r["local_path"]),
+            "post_date": r["post_date"], "downloaded_at": r["downloaded_at"],
+            "status": r["status"], "attempts": r["attempts"],
+            "bytes": r["bytes_done"], "error": r["error"],
+        })
+    if fmt == "json":
+        return {
+            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "count": len(items),
+            "items": items,
+        }
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames)
+    writer.writeheader()
+    for it in items:
+        writer.writerow(it)
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="rmm-export.csv"'},
+    )
+
+
 # --------------------------------------------------------------------------- settings
 @app.get("/api/settings")
 async def api_get_settings() -> dict[str, Any]:
@@ -745,6 +923,11 @@ async def api_set_settings(payload: dict) -> dict[str, Any]:
                 patch[key] = max(0, min(51, int(value)))
             except (TypeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail="video_quality moet een getal zijn (0-51)") from exc
+        elif key == "max_bandwidth_mb":
+            try:
+                patch[key] = max(0, min(10000, int(value)))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="max_bandwidth_mb moet een getal zijn (0 = onbeperkt)") from exc
         elif key == "naming_mode":
             patch[key] = value if value in ("flat", "posts") else "flat"
         elif key == "date_subfolder":

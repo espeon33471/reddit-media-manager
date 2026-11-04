@@ -16,6 +16,19 @@
   </div>
 </div>
 
+<div class="panel">
+  <div class="row spread" style="flex-wrap:wrap;gap:8px;align-items:center">
+    <div class="row" style="gap:6px">
+      <span class="small">Filter:</span>
+      <button id="qf-all" class="small primary">Alles</button>
+      <button id="qf-404" class="small">404</button>
+      <button id="qf-rate" class="small">Rate-limited</button>
+      <button id="qf-other" class="small">Andere fouten</button>
+    </div>
+    <span id="qf-count" class="small"></span>
+  </div>
+</div>
+
 <div class="panel" style="padding:0.4rem 0">
   <table id="queue-table">
     <thead>
@@ -39,16 +52,32 @@
 
 {% block scripts %}
 <script>
-  async function loadQueue() {
-    try {
-      const { items } = await RMM.api("/api/queue?limit=500");
-      const body = document.getElementById("queue-body");
-      if (!items.length) {
-        body.innerHTML = '<tr><td colspan="9" class="small">Wachtrij is leeg.</td></tr>';
-        return;
-      }
-      body.innerHTML = items.map(it => {
+  window._queueItems = [];
+  window._queueFilter = "all";
+
+  function errorKind(it) {
+    const e = it.error ? String(it.error) : "";
+    if (!e) return "";
+    if (e.includes("404")) return "404";
+    if (e.includes("429") || e.toLowerCase().includes("rate")) return "rate";
+    return "other";
+  }
+
+  function renderQueue(items) {
+    const body = document.getElementById("queue-body");
+    const filter = window._queueFilter;
+    const rows = filter === "all" ? items : items.filter(it => errorKind(it) === filter);
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="9" class="small">${
+        items.length ? "Geen items voor deze filter." : "Wachtrij is leeg."
+      }</td></tr>`;
+    } else {
+      body.innerHTML = rows.map(it => {
         const retryable = it.status === "failed" || it.status === "skipped";
+        const kind = errorKind(it);
+        const errCell = kind === "404"
+          ? '<span class="badge" title="Post niet meer beschikbaar">404 — post niet meer beschikbaar</span>'
+          : RMM.esc(it.error || "");
         return `
         <tr>
           <td class="mono small">${it.id}</td>
@@ -58,7 +87,7 @@
           <td><span class="badge s-${it.status}">${it.status}</span></td>
           <td class="num small">${it.bytes_done > 0 ? RMM.fmtBytes(it.bytes_done) : "—"}</td>
           <td class="num">${it.attempts ?? 0}</td>
-          <td class="small clamp" title="${RMM.esc(it.error)}">${RMM.esc(it.error || "")}</td>
+          <td class="small clamp" title="${RMM.esc(it.error)}">${errCell}</td>
           <td>${retryable ? `<button class="small b-retry" data-id="${it.id}">Opnieuw</button>` : (it.status === "done" ? "✓" : "")}</td>
         </tr>`;
       }).join("");
@@ -71,6 +100,25 @@
           } catch (e) { RMM.toast(e.message, "err"); }
         };
       });
+    }
+    const countEl = document.getElementById("qf-count");
+    if (countEl) countEl.textContent = `${rows.length} van ${items.length} items`;
+  }
+
+  function applyFilter(kind) {
+    window._queueFilter = kind;
+    for (const k of ["all", "404", "rate", "other"]) {
+      const b = document.getElementById("qf-" + k);
+      if (b) b.classList.toggle("primary", k === kind);
+    }
+    renderQueue(window._queueItems);
+  }
+
+  async function loadQueue() {
+    try {
+      const { items } = await RMM.api("/api/queue?limit=500");
+      window._queueItems = items;
+      renderQueue(items);
     } catch (e) {
       document.getElementById("queue-body").innerHTML =
         `<tr><td colspan="9" class="small">Fout: ${RMM.esc(e.message)}</td></tr>`;
@@ -99,6 +147,10 @@
     } catch (e) { RMM.toast(e.message, "err"); }
   }
   RMM.sortableTable("queue-table", [8]);
+  for (const k of ["all", "404", "rate", "other"]) {
+    const b = document.getElementById("qf-" + k);
+    if (b) b.onclick = () => applyFilter(k);
+  }
   document.getElementById("btn-start").onclick = () => engine("start");
   document.getElementById("btn-pause").onclick = () => engine("pause");
   document.getElementById("btn-resume").onclick = () => engine("resume");

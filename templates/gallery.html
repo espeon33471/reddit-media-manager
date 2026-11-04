@@ -22,6 +22,21 @@
   </div>
 </div>
 
+<div id="gal-actionbar" class="panel" style="display:none;position:sticky;top:8px;z-index:50;margin-bottom:0.7rem">
+  <div class="row spread" style="flex-wrap:wrap;gap:8px;align-items:center">
+    <span class="small"><strong id="gal-selcount">0</strong> geselecteerd</span>
+    <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">
+      <label class="small" style="margin:0"><input type="checkbox" id="gal-keepfiles"> bestanden op schijf behouden</label>
+      <button id="gal-delete" class="danger">Verwijderen</button>
+      <span style="width:12px"></span>
+      <select id="gal-movesub" style="min-width:150px"><option value="">Verplaats naar sub…</option></select>
+      <button id="gal-move">Verplaats</button>
+      <span style="width:12px"></span>
+      <button id="gal-deselect" class="small">Deselecteren</button>
+    </div>
+  </div>
+</div>
+
 <div id="gallery-grid" class="gallery-grid">
   <div class="gallery-empty">Laad galerij…</div>
 </div>
@@ -97,6 +112,16 @@
     padding: 0.1rem 0.4rem;
     border-radius: 5px;
   }
+  .gallery-item .g-check {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 2;
+    width: 1.1rem;
+    height: 1.1rem;
+    cursor: pointer;
+    accent-color: var(--accent, #4a9eff);
+  }
   .gallery-empty {
     grid-column: 1 / -1;
     text-align: center;
@@ -160,6 +185,8 @@
 const PAGE_SIZE = 60;
 let offset = 0;
 let total = 0;
+const selected = new Set();
+let galSubs = [];
 
 async function loadGallery(reset = false) {
   if (reset) offset = 0;
@@ -183,6 +210,8 @@ async function loadGallery(reset = false) {
         sel.innerHTML += `<option value="${RMM.esc(s)}">${RMM.esc(s)}</option>`;
       }
       if (sub) sel.value = sub;
+      galSubs = data.subs.slice();
+      populateMoveSubs();
     }
 
     const grid = document.getElementById("gallery-grid");
@@ -208,6 +237,7 @@ async function loadGallery(reset = false) {
 function makeGalleryItem(it) {
   const el = document.createElement("div");
   el.className = "gallery-item";
+  el.dataset.id = it.id;
   const mediaUrl = `/media/${it.local_path}`;
   const mtype = (it.media_type || "photo").toLowerCase();
 
@@ -222,11 +252,27 @@ function makeGalleryItem(it) {
     el.appendChild(vid);
   } else {
     const img = document.createElement("img");
-    img.src = mediaUrl;
+    // Foto's: grid laadt snelle thumbnails; lightbox toont later het origineel
+    if (mtype === "photo") {
+      img.src = `/api/media/thumbnail?path=${encodeURIComponent(it.local_path)}`;
+      img.onerror = () => { img.onerror = null; img.src = mediaUrl; };
+    } else {
+      img.src = mediaUrl;
+    }
     img.loading = "lazy";
     img.alt = it.post_id;
     el.appendChild(img);
   }
+
+  // Selectie-checkbox (niet de lightbox openen bij klik)
+  const chk = document.createElement("input");
+  chk.type = "checkbox";
+  chk.className = "g-check";
+  chk.title = "Selecteren";
+  chk.checked = selected.has(it.id);
+  chk.addEventListener("click", e => e.stopPropagation());
+  chk.addEventListener("change", e => { e.stopPropagation(); toggleSelect(it.id, chk.checked); });
+  el.appendChild(chk);
 
   const badge = document.createElement("span");
   badge.className = "g-badge";
@@ -241,6 +287,68 @@ function makeGalleryItem(it) {
   // Click → lightbox
   el.addEventListener("click", () => openLightbox(it, mediaUrl, mtype));
   return el;
+}
+
+function toggleSelect(id, on) {
+  if (on) selected.add(id); else selected.delete(id);
+  updateActionBar();
+}
+
+function updateActionBar() {
+  const bar = document.getElementById("gal-actionbar");
+  document.getElementById("gal-selcount").textContent = selected.size;
+  bar.style.display = selected.size > 0 ? "" : "none";
+}
+
+function clearSelection() {
+  selected.clear();
+  document.querySelectorAll(".g-check").forEach(c => { c.checked = false; });
+  updateActionBar();
+}
+
+function populateMoveSubs() {
+  const sel = document.getElementById("gal-movesub");
+  sel.innerHTML = '<option value="">Verplaats naar sub…</option>' +
+    galSubs.map(s => `<option value="${RMM.esc(s)}">r/${RMM.esc(s)}</option>`).join("");
+}
+
+async function deleteSelected() {
+  const n = selected.size;
+  const keep = document.getElementById("gal-keepfiles").checked;
+  const msg = keep
+    ? `${n} item(s) uit de database verwijderen, bestanden op schijf behouden?`
+    : `${n} item(s) verwijderen? De bestanden op schijf worden ook verwijderd.`;
+  if (!confirm(msg)) return;
+  try {
+    const res = await RMM.api("/api/gallery/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [...selected], keep_files: keep }),
+    });
+    RMM.toast(`Verwijderd: ${res.removed_rows ?? n} item(s)${res.files_removed ? ` (${res.files_removed} bestand(en))` : ""}`);
+    clearSelection();
+    loadGallery(true);
+  } catch (e) {
+    RMM.toast(e.message, "err");
+  }
+}
+
+async function moveSelected() {
+  const target = document.getElementById("gal-movesub").value;
+  if (!target) { RMM.toast("Kies eerst een doel-subreddit.", "err"); return; }
+  if (!confirm(`${selected.size} item(s) verplaatsen naar r/${target}?`)) return;
+  try {
+    const res = await RMM.api("/api/gallery/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [...selected], target_sub: target }),
+    });
+    RMM.toast(`Verplaatst: ${res.moved ?? selected.size} item(s) naar r/${target}`);
+    clearSelection();
+    loadGallery(true);
+  } catch (e) {
+    RMM.toast(e.message, "err");
+  }
 }
 
 function openLightbox(it, mediaUrl, mtype) {
@@ -290,6 +398,9 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeLightbo
 document.getElementById("gal-loadmore").onclick = () => loadGallery(false);
 document.getElementById("gal-filter-sub").onchange = () => loadGallery(true);
 document.getElementById("gal-filter-type").onchange = () => loadGallery(true);
+document.getElementById("gal-delete").onclick = deleteSelected;
+document.getElementById("gal-move").onclick = moveSelected;
+document.getElementById("gal-deselect").onclick = clearSelection;
 
 loadGallery(true);
 </script>
