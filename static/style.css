@@ -64,6 +64,19 @@ h2 { font-size: 1.05rem; margin: 1.4rem 0 0.6rem; }
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .row { display: flex; gap: 0.7rem; align-items: center; flex-wrap: wrap; }
 .spread { justify-content: space-between; }
+.panel-title { color: var(--muted); font-weight: 600; font-size: 0.85rem; letter-spacing: 0.03em; text-transform: uppercase; }
+a.button {
+  display: inline-block;
+  padding: 0.35rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+a.button:hover { text-decoration: none; border-color: var(--accent-soft); }
+a.button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+a.button.primary:hover { background: var(--accent-soft); }
 
 table { width: 100%; border-collapse: collapse; min-width: 720px; }
 th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: anywhere; }
