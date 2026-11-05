@@ -9,11 +9,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+from .throttle import block_breaker
 
 log = logging.getLogger("rmm.reddit")
 
@@ -102,6 +105,8 @@ class RedditClient:
 
         last_exc: Exception | None = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
+            # Circuit-breaker: pauze afwachten bij een 403/429-storm.
+            await block_breaker.wait_if_open()
             await self._limiter.acquire()
             auth = await self._auth_headers()
             hdrs = {
@@ -125,6 +130,7 @@ class RedditClient:
                 continue
 
             if status in (429, 503):
+                block_breaker.report_block(status)
                 ra = resp_headers.get("retry-after") or resp_headers.get("Retry-After") or "0"
                 try:
                     retry_after = float(ra)
@@ -133,6 +139,26 @@ class RedditClient:
                 delay = max(retry_after, 2.0 * attempt)
                 log.warning("HTTP %s — probeer opnieuw over %.1fs (poging %d/%d)",
                             status, delay, attempt, MAX_ATTEMPTS)
+                await asyncio.sleep(delay)
+                continue
+
+            if status == 403:
+                # 403 = rate-limiting of een IP-block (HTML "Blocked"-pagina).
+                # Niet direct opgeven: langere backoff + breaker, dan pas
+                # de volgende poging — alleen ná alle pogingen een fout.
+                block_breaker.report_block(403)
+                snippet = raw.decode("utf-8", errors="replace")[:200].lower()
+                is_block_page = "blocked" in snippet and "<html" in snippet
+                last_exc = RedditError(
+                    "Reddit HTTP 403 (IP/rate-limit geblokkeerd"
+                    + (" — 'Blocked'-pagina)" if is_block_page else ")")
+                )
+                if attempt == MAX_ATTEMPTS:
+                    break
+                delay = min(15.0 * attempt, 90.0) * (0.8 + random.random() * 0.4)
+                log.warning("HTTP 403 (poging %d/%d) — pauze %.1fs%s",
+                            attempt, MAX_ATTEMPTS, delay,
+                            " [Reddit-block-pagina]" if is_block_page else "")
                 await asyncio.sleep(delay)
                 continue
 

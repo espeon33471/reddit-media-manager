@@ -7,6 +7,7 @@
   <div class="row spread">
     <div class="row">
       <span id="engine-state"><span class="badge badge-stopped">…</span></span>
+      <span id="blocker-badge" title="Reddit blokkeert aanvallen (403/429-storm). Alle downloads pauzeren automatisch tot de pauze is verlopen."></span>
     </div>
     <div class="row">
       <button id="btn-start" class="primary">Start</button>
@@ -52,6 +53,14 @@
     document.getElementById("st-speed").textContent =
       (st.speed_bps > 0 ? RMM.fmtBytes(st.speed_bps) + "/s" : "0 B/s");
     document.getElementById("engine-state").innerHTML = RMM.statusBadge(st.state);
+
+    const bl = st.blocker || {};
+    const blEl = document.getElementById("blocker-badge");
+    if (bl.open && bl.cooldown_remaining > 0) {
+      blEl.innerHTML = `<span class="badge badge-paused">Reddit blokkeert — auto-pauze ${Math.ceil(bl.cooldown_remaining)}s</span>`;
+    } else {
+      blEl.innerHTML = "";
+    }
 
     const btns = {
       "btn-start": st.state === "stopped",

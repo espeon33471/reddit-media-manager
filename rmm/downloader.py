@@ -17,6 +17,7 @@ from typing import Any, Callable
 import httpx
 
 from .config import load_settings  # noqa: F401
+from .throttle import block_breaker
 
 log = logging.getLogger("rmm.downloader")
 
@@ -99,12 +100,24 @@ class MediaDownloader:
             ref = "https://www.redgifs.com/" if "redgifs" in host else "https://www.gifer.com/"
             return {"User-Agent": ua, "Referer": ref, "Accept": "*/*"}
         if self._is_reddit_host(url):
-            return {
+            headers = {
                 "User-Agent": ua,
                 "Referer": "https://www.reddit.com/",
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
             }
+            # NSFW/age-gated media op redd.it/redditvideo.com eisen dat we
+            # geïdentificeerd zijn — zonder cookies krijgt de CDN 403 terug.
+            parts: list[str] = []
+            loid = str(self.settings.get("reddit_loid") or "").strip()
+            session = str(self.settings.get("reddit_session") or "").strip()
+            if loid:
+                parts.append(f"loid={loid}")
+            if session:
+                parts.append(f"reddit_session={session}")
+            if parts:
+                headers["Cookie"] = "; ".join(parts)
+            return headers
         # Overige externe hosts: browser-UA, zonder misleidende referer.
         return {"User-Agent": ua, "Accept": "*/*"}
 
@@ -193,6 +206,12 @@ class MediaDownloader:
                 _remove_quiet(tmp_path)
                 raise PausedError()
 
+            # Circuit-breaker: bij een 403-storm wacht iedereen tot de pauze
+            # is afgerold i.p.v. de block te verergeren.
+            breaker_wait = await block_breaker.wait_if_open()
+            if breaker_wait > 0:
+                log.info("Breaker-pauze %.0fs afgerold; hervat %s", breaker_wait, url)
+
             await self._acquire_start_slot()
 
             sha = hashlib.sha256()
@@ -209,6 +228,8 @@ class MediaDownloader:
                     # Retry-After als de server die stuurt, en voeg jitter toe
                     # zodat workers niet tegelijk terugkomen (thundering herd).
                     last_error = DownloadError(f"HTTP {resp.status_code} bij download van {url}")
+                    if resp.status_code in (403, 429):
+                        block_breaker.report_block(resp.status_code)
                     _remove_quiet(tmp_path)
                     if attempt == MAX_ATTEMPTS:
                         break

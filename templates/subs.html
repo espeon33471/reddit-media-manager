@@ -79,7 +79,7 @@
           <td><input type="number" min="0" class="f-automin" style="width:70px" value="${s.auto_sync_minutes ?? ""}" title="Minuten; leeg of 0 = gebruik het globale interval uit Settings"></td>
           <td class="num">${s.done_count ?? 0} / ${s.file_count ?? 0}</td>
           <td class="small">${s.last_synced_at ? RMM.fmtDate(s.last_synced_at) : "—"}</td>
-          <td class="row" style="gap:0.35rem;white-space:nowrap">
+          <td class="row" style="gap:0.35rem">
             <button class="small b-save" title="Wijzigingen van deze subreddit opslaan">Opslaan</button>
             <button class="small b-sync primary" title="Nieuwe posts sinds de laatste sync scannen, in de wachtrij zetten én downloaden">Sync</button>
             <button class="small b-resync" title="Hele subreddit opnieuw scannen: ook posts die al eerder gezien zijn (bijv. na een filterverandering)">Resync</button>

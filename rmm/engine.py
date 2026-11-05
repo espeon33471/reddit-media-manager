@@ -21,6 +21,7 @@ from .db import DB
 from .convert import ConvertError, convert_file
 from .downloader import DownloadError, MediaDownloader, PausedError
 from .media import classify_media, guess_extension_from_content_type, url_extension
+from .throttle import block_breaker
 from .util import now_iso, sanitize_stem
 
 log = logging.getLogger("rmm.engine")
@@ -128,6 +129,7 @@ class Engine:
             "speed_bps": round(self.speed_bps(), 1),
             "session_bytes": self._session_bytes,
             "recent_errors": list(self.errors)[-20:][::-1],
+            "blocker": block_breaker.state(),
         }
 
     # -- worker ------------------------------------------------------------------

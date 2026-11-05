@@ -78,16 +78,23 @@ a.button:hover { text-decoration: none; border-color: var(--accent-soft); }
 a.button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 a.button.primary:hover { background: var(--accent-soft); }
 
-table { width: 100%; border-collapse: collapse; min-width: 720px; }
-th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: anywhere; }
-th, td { white-space: nowrap; }
-th:has(.small), td:has(.row) { white-space: normal; }
+table { width: 100%; border-collapse: collapse; min-width: 640px; }
+th, td {
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 th { color: var(--muted); font-weight: 600; font-size: 0.85rem; letter-spacing: 0.03em; text-transform: uppercase; }
 tr:last-child td { border-bottom: none; }
 td.num, th.num { text-align: right; }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; }
 .small { font-size: 0.85rem; color: var(--muted); }
-.clamp { max-width: min(340px, 38vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }
+.clamp { max-width: min(360px, 42vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.clamp { display: table-cell; }
 
 .badge {
   display: inline-block;
