@@ -30,6 +30,23 @@ SPEED_WINDOW = 10.0  # seconden voor de snelheidsberekening
 MAX_REQUEUE = 5  # max. extra herpogingen van transi\u00ebnte fouten (403/429/netwerk)
 
 
+def _cleanup_part_files(dataroot: str) -> int:
+    """Verwijder achtergebleven *.part-bestanden (onderbroken downloads)."""
+    removed = 0
+    try:
+        for root, _dirs, files in os.walk(dataroot):
+            for name in files:
+                if name.endswith(".part"):
+                    try:
+                        os.remove(os.path.join(root, name))
+                        removed += 1
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return removed
+
+
 def _parse_candidates(raw) -> list[str] | None:
     """Kandidaat-URL's uit de rij (JSON of lijst) → list[str]; onjuist/leeg → None."""
     if not raw:
@@ -69,6 +86,10 @@ class Engine:
             await self.db.execute(
                 "UPDATE downloads SET status = 'pending', error = NULL WHERE status = 'running'"
             )
+            # Opruimen: achtergebleven .part-bestanden (onderbroken downloads).
+            _removed = _cleanup_part_files(self.dataroot_fn())
+            if _removed:
+                log.info("%d achtergebleven .part-bestand(en) opgeruimd", _removed)
             self.state = "running"
             n = max(1, int(self.settings.get("concurrency", 4)))
             self._tasks = [asyncio.create_task(self._worker(i)) for i in range(n)]
@@ -293,6 +314,16 @@ class Engine:
             if os.path.exists(dest):
                 dest = os.path.join(directory, f"{stem[:60]}_{post_id}.{ext}")
 
+        # Oud bestand opruimen (her-download na naamwijziging → anders orfaan).
+        old_local = row.get("local_path")
+        if old_local:
+            try:
+                if os.path.exists(old_local) and os.path.abspath(old_local) != os.path.abspath(dest):
+                    os.remove(old_local)
+                    log.info("Oud bestand opgeruimd: %s", old_local)
+            except OSError:
+                log.debug("Kon oud bestand niet verwijderen: %s", old_local, exc_info=True)
+
         # 2) Download (met pauze-check per chunk + snelheidsmeting + bytes_done in DB).
         # on_bytes(total) = cumulatieve bytes; record_bytes krijgt de delta (snelheid).
         _prog = {"last": 0}
@@ -387,7 +418,9 @@ class Engine:
 
     async def redownload(self, sub: str | None = None) -> int:
         """Zet `done`-items terug op `pending` (her-download, hoogste resolutie)."""
-        sql = ("UPDATE downloads SET status = 'pending', error = NULL, local_path = NULL, "
+        # NB: local_path blijft staan zodat _process het oude bestand kan opruimen
+        # (bij een naamwijziging zou anders een orfaanbestand overblijven).
+        sql = ("UPDATE downloads SET status = 'pending', error = NULL, "
                "retry_count = 0, next_retry_at = NULL WHERE status = 'done'")
         params: tuple = ()
         if sub:

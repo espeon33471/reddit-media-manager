@@ -169,14 +169,17 @@ class SyncService:
                     if not post_id:
                         continue
 
-                    # Post-level dedup: skip alleen als er al een 'done' bestand is.
-                    # Posts met uitsluitend failed/skipped/pending worden bij een
-                    # re-sync opnieuw geprobeerd (bijv. na een media/NSFW-fix).
-                    done_row = await self.db.one(
-                        "SELECT id FROM downloads WHERE sub = ? AND post_id = ? AND status = 'done' LIMIT 1",
+                    # Post-level dedup: skip als er al een 'done', 'pending' of
+                    # 'running' rij is (anders ontstaat bij een re-sync tijdens een
+                    # draaiende queue een duplicaat). Posts met uitsluitend
+                    # failed/skipped worden wél opnieuw geprobeerd (bijv. na een
+                    # media/NSFW-fix).
+                    active_row = await self.db.one(
+                        "SELECT id FROM downloads WHERE sub = ? AND post_id = ? "
+                        "AND status IN ('done','pending','running') LIMIT 1",
                         (sub, post_id),
                     )
-                    if done_row:
+                    if active_row:
                         summary["already_seen_posts"] += 1
                         continue
                     # Oude failed/skipped rijen opruimen zodat een retry geen duplicaten maakt.
