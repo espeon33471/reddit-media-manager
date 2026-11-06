@@ -682,7 +682,11 @@ async def api_gallery_move(payload: dict) -> dict[str, Any]:
         if not src.is_relative_to(base) or not src.is_file():
             continue
         dest = _unique_dest(dest_dir / src.name)
-        shutil.move(str(src), str(dest))
+        try:
+            shutil.move(str(src), str(dest))
+        except OSError as exc:
+            log.warning("Galerij: kon %s niet verplaatsen: %s — overgeslagen", src, exc)
+            continue
         new_rel = dest.relative_to(base).as_posix()
         await state.db.execute(
             "UPDATE downloads SET sub = ?, local_path = ? WHERE id = ?",

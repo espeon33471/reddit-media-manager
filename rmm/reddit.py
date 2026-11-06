@@ -131,6 +131,7 @@ class RedditClient:
 
             if status in (429, 503):
                 block_breaker.report_block(status)
+                last_exc = RedditError(f"Reddit HTTP {status} (rate-limiet)")
                 ra = resp_headers.get("retry-after") or resp_headers.get("Retry-After") or "0"
                 try:
                     retry_after = float(ra)
