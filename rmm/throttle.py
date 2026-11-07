@@ -25,8 +25,8 @@ log = logging.getLogger("rmm.throttle")
 
 WINDOW = 120.0        # seconden: window waarin blocks worden geteld
 THRESHOLD = 6         # aantal blocks in de window → breaker open
-COOLDOWN = 180.0      # seconden pauze zodra de breaker open is
-MAX_COOLDOWN = 600.0  # elke opeenvolgende trip verlengt de pauze (max 10 min)
+COOLDOWN = 300.0      # seconden pauze zodra de breaker open is (5 min)
+MAX_COOLDOWN = 900.0  # elke opeenvolgende trip verlengt de pauze (max 15 min)
 
 
 class BlockBreaker:
@@ -46,17 +46,18 @@ class BlockBreaker:
             self._blocks.pop(0)
 
         if len(self._blocks) >= THRESHOLD and now >= self._open_until:
-            self._open_until = now + COOLDOWN
             self._trips = min(self._trips + 1, 5)
+            cooldown = min(COOLDOWN * self._trips, MAX_COOLDOWN)
+            self._open_until = now + cooldown
             log.warning(
                 "Reddit-blokker detecteerd (%d blocks/%ds) — pauze %.0fs (trip %d)",
-                len(self._blocks), int(WINDOW), COOLDOWN, self._trips,
+                len(self._blocks), int(WINDOW), cooldown, self._trips,
             )
             # Wekker zodat de pauze ook afloopt als niemand wacht.
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    loop.call_later(COOLDOWN, self._close_waiters)
+                    loop.call_later(cooldown, self._close_waiters)
             except RuntimeError:
                 pass
 

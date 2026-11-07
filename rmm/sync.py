@@ -331,11 +331,18 @@ class SyncService:
 
     async def _record_sync_error(self, sub: str, msg: str) -> None:
         try:
-            await self.db.execute(
-                "INSERT INTO downloads(sub, post_id, url, status, error) "
-                "VALUES (?, 'sync-fout', '', 'failed', ?)",
-                (sub, msg[:400]),
+            # UPSERT: max 1 rij per sub met post_id='sync-fout' (geen stapelen).
+            cur = await self.db.execute(
+                "UPDATE downloads SET status='failed', error=?, "
+                "attempts=attempts+1 WHERE sub=? AND post_id='sync-fout'",
+                (msg[:400], sub),
             )
+            if cur.rowcount == 0:
+                await self.db.execute(
+                    "INSERT INTO downloads(sub, post_id, url, status, error) "
+                    "VALUES (?, 'sync-fout', '', 'failed', ?)",
+                    (sub, msg[:400]),
+                )
         except Exception:  # noqa: BLE001 — nooit de echte fout overmaskeren
             log.exception("Kon sync-fout niet in queue vastleggen")
 

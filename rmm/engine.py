@@ -91,9 +91,9 @@ class Engine:
             if _removed:
                 log.info("%d achtergebleven .part-bestand(en) opgeruimd", _removed)
             self.state = "running"
-            n = max(1, int(self.settings.get("concurrency", 4)))
+            n = max(1, min(int(self.settings.get("concurrency", 2)), 2))
             self._tasks = [asyncio.create_task(self._worker(i)) for i in range(n)]
-            log.info("Engine gestart met %d workers", n)
+            log.info("Engine gestart met %d workers (max 2)", n)
 
     async def pause(self) -> None:
         self.state = "paused"

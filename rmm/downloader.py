@@ -58,7 +58,7 @@ class MediaDownloader:
             follow_redirects=True,
         )
         # Globale start-spacing over alle workers heen (dempt de initieele burst).
-        self._spacing = max(0.0, float(settings.get("download_spacing", 0.7)))
+        self._spacing = max(2.0, float(settings.get("download_spacing", 2.0)))
         self._space_lock = asyncio.Lock()
         self._last_start = 0.0
         # Optionele bandbreedte-limiet (MB/s → bytes/sec; 0 = onbeperkt).
