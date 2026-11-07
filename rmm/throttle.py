@@ -61,9 +61,11 @@ class BlockBreaker:
             )
             # Wekker zodat de pauze ook afloopt als niemand wacht.
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.call_later(cooldown, self._close_waiters)
+                # get_running_loop (Python 3.12+): get_event_loop() is deprecated
+                # en geeft een RuntimeWarning; hier draait een loop al (dit wordt
+                # vanuit de async downloader aangeroepen).
+                loop = asyncio.get_running_loop()
+                loop.call_later(cooldown, self._close_waiters)
             except RuntimeError:
                 pass
 

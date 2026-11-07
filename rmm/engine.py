@@ -75,6 +75,7 @@ class Engine:
         self._lock = asyncio.Lock()
         self._bytes_log: deque[tuple[float, int]] = deque()
         self._session_bytes = 0
+        self._bytes_done_ts: dict[int, float] = {}
         self.errors: deque[dict[str, str]] = deque(maxlen=50)
 
     # -- besturing -----------------------------------------------------------
@@ -167,6 +168,17 @@ class Engine:
             if self.state != "running":
                 await asyncio.sleep(0.25)
                 continue
+            # Geen sessie-cookie → elke download is gegarandeerd 403; het
+            # doorlopen van de hele queue (en verbranden van de retries) heeft
+            # dus geen zin. Stop netjes en wacht tot de cookie er weer is.
+            if not self._has_session():
+                log.info("Geen sessie-cookie — engine pauzeert (geen zin in 403-storm)")
+                await self.db.execute(
+                    "UPDATE downloads SET status = 'pending', error = NULL WHERE status = 'running'"
+                )
+                await self._maybe_auto_stop()
+                await asyncio.sleep(1.0)
+                continue
             row = await self._claim_next()
             if row is None:
                 await self._maybe_auto_stop()
@@ -251,6 +263,11 @@ class Engine:
     def _should_pause(self) -> bool:
         return self.state != "running"
 
+    def _has_session(self) -> bool:
+        """Is er (nog) een sessie-cookie ingesteld? Zonder cookie zijn downloads
+        gegarandeerd 403 — geen zin in een retry-storm die het hele quota verbrandt."""
+        return bool(str(self.settings.get("reddit_session") or "").strip())
+
     async def _process(self, row: dict[str, Any]) -> None:
         sub, post_id, url = row["sub"], row["post_id"], row["url"]
         if not url:
@@ -271,6 +288,22 @@ class Engine:
                 (dup["local_path"], now_iso(), row["id"]),
             )
             log.info("Skip %s/%s: URL reeds gedownload", sub, post_id)
+            return
+
+        # 1b) Dedup-race-guard: dezelfde URL is door een andere worker *nu*
+        # in verwerking (duplicaat over subreddits heen) → even uitstellen
+        # i.p.v. hetzelfde bestand dubbel downloaden.
+        running_dup = await self.db.one(
+            "SELECT id FROM downloads WHERE url = ? AND status = 'running' AND id != ? LIMIT 1",
+            (url, row["id"]),
+        )
+        if running_dup:
+            await self.db.execute(
+                "UPDATE downloads SET status = 'pending', next_retry_at = ?, "
+                "error = 'zelfde URL nu in verwerking — opnieuw geprobeerd' WHERE id = ?",
+                (time.time() + 30, row["id"]),
+            )
+            log.info("Item %d (%s/%s) uitgesteld: URL wordt nu elders gedownload", row["id"], sub, post_id)
             return
 
         # Bestemming: vlak <dataroot>/<sub>[/<yyyy-mm>]/<post_title>[_idx].<ext>
@@ -327,14 +360,19 @@ class Engine:
         # 2) Download (met pauze-check per chunk + snelheidsmeting + bytes_done in DB).
         # on_bytes(total) = cumulatieve bytes; record_bytes krijgt de delta (snelheid).
         _prog = {"last": 0}
+        item_id = row["id"]
         def on_bytes(total: int) -> None:
             delta = total - _prog["last"]
             _prog["last"] = total
             if delta > 0:
                 self.record_bytes(delta)
+            # Throttle-check vóór create_task: anders wordt per chunk een task
+            # aangemaakt die direct opgeheven wordt (bij grote bestanden
+            # duizenden kortstondige tasks per item).
+            if time.monotonic() - self._bytes_done_ts.get(item_id, 0.0) < 0.9:
+                return
             try:
-                import asyncio as _a
-                _a.get_running_loop().create_task(self._set_bytes_done(row["id"], total))
+                asyncio.get_running_loop().create_task(self._set_bytes_done(item_id, total))
             except RuntimeError:
                 pass
 
@@ -405,16 +443,22 @@ class Engine:
     async def _set_bytes_done(self, item_id: int, n: int) -> None:
         """Update bytes_done (throttle: maximaal ~1x/sec per item)."""
         now = time.monotonic()
-        last = getattr(self, "_bytes_done_ts", {}).get(item_id, 0.0)
-        if now - last < 1.0:
+        if now - self._bytes_done_ts.get(item_id, 0.0) < 1.0:
             return
-        setattr(self, "_bytes_done_ts", {**getattr(self, "_bytes_done_ts", {}), item_id: now})
+        self._bytes_done_ts[item_id] = now
         try:
             await self.db.execute(
                 "UPDATE downloads SET bytes_done = ? WHERE id = ?", (n, item_id)
             )
         except Exception:  # noqa: BLE001 — status-update mag niet crashen
             pass
+        finally:
+            # Ruim oude entries op zodat de dict niet onbegrensd groeit.
+            if len(self._bytes_done_ts) > 500:
+                cutoff = now - 3600
+                self._bytes_done_ts = {
+                    k: v for k, v in self._bytes_done_ts.items() if v >= cutoff
+                }
 
     async def redownload(self, sub: str | None = None) -> int:
         """Zet `done`-items terug op `pending` (her-download, hoogste resolutie)."""
@@ -448,13 +492,20 @@ class Engine:
         return True
 
     async def retry_failed(self) -> int:
-        """Zet ALLE `failed`-items terug op `pending` (bulk-herhaling)."""
-        cur = await self.db.execute(
-            "UPDATE downloads SET status = 'pending', error = NULL, retry_count = 0, "
-            "next_retry_at = NULL WHERE status = 'failed'"
+        """Zet ALLE `failed`-items terug op `pending` (bulk-herhaling), met een
+        kleine stagger zodat ze niet als één storm tegelijk de CDN raken —
+        dat veroorzaakt een 403/429-cascade en nog méér failures."""
+        rows = await self.db.query(
+            "SELECT id FROM downloads WHERE status = 'failed' ORDER BY id"
         )
-        n = cur.rowcount if cur else 0
-        log.info("Herhaal mislukte: %d items teruggezet op pending", n)
+        for i, r in enumerate(rows):
+            await self.db.execute(
+                "UPDATE downloads SET status = 'pending', error = NULL, retry_count = 0, "
+                "next_retry_at = ? WHERE id = ?",
+                (time.time() + (i % 120), r["id"]),
+            )
+        n = len(rows)
+        log.info("Herhaal mislukte: %d items teruggezet op pending (gestaggerd over 2 min)", n)
         if n and self.state == "stopped":
             await self.start()
         return n
