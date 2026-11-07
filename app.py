@@ -371,6 +371,15 @@ async def api_queue_redownload(payload: dict) -> dict[str, Any]:
     return {"ok": True, "count": n}
 
 
+@app.post("/api/queue/retry_failed")
+async def api_queue_retry_failed() -> dict[str, Any]:
+    """Zet alle failed-items opnieuw in de wachtrij en start de engine indien nodig."""
+    assert state.engine is not None
+    n = await state.engine.retry_failed()
+    log.info("Herhaal mislukte: %d items opnieuw in wachtrij", n)
+    return {"ok": True, "count": n}
+
+
 # --------------------------------------------------------------------------- history
 @app.get("/api/history")
 async def api_history(sub: Optional[str] = None, limit: int = 300) -> dict[str, Any]:
@@ -948,6 +957,9 @@ async def api_set_settings(payload: dict) -> dict[str, Any]:
         log.error("Settings opslaan mislukt: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     log.info("Settings bijgewerkt: %s", sorted(patch))
+    # Proxy wijziging direct actief maken zonder restart.
+    if "proxy_url" in patch and state.downloader is not None:
+        await state.downloader.set_proxy(str(patch["proxy_url"]).strip() or None)
     return {"settings": dict(state.settings)}
 
 

@@ -43,6 +43,9 @@ DEFAULTS: dict[str, Any] = {
     "gif_mode": "keep",
     # Maximale download-snelheid in MB/s (0 = onbeperkt)
     "max_bandwidth_mb": 0,
+    # Optionele proxy voor API + downloads (bijv. "http://host:port" of "socks5://host:port").
+    # Leeg = directe verbinding. Handig als Reddit de lokale IP blokkeert (403 van de CDN).
+    "proxy_url": "",
     # Naming & structure
     "naming_mode": "flat",          # "flat" or "posts"
     "date_subfolder": "none",       # "none" or "month"

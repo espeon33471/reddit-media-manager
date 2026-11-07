@@ -52,14 +52,23 @@ def _http(
     headers: dict[str, str] | None = None,
     method: str = "GET",
     body: bytes | None = None,
+    settings: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, str], bytes]:
     """Synchron HTTP via urllib.request.
     Geeft (status, headers, body) terug — ook bij 4xx/5xx.
+    `settings` levert optioneel `proxy_url` op (http/https proxy voor de API).
     """
     hdrs = dict(headers or {})
     req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
+    proxy = str((settings or {}).get("proxy_url") or "").strip()
+    if proxy:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        )
+    else:
+        opener = urllib.request.build_opener()
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with opener.open(req, timeout=TIMEOUT) as resp:
             return resp.status, dict(resp.headers), resp.read()
     except urllib.error.HTTPError as e:
         return e.code, dict(e.headers), e.read()
@@ -126,7 +135,7 @@ class RedditClient:
             }
             try:
                 status, resp_headers, raw = await asyncio.to_thread(
-                    _http, url, hdrs, method, body
+                    _http, url, hdrs, method, body, self.settings
                 )
             except RedditError:
                 raise
@@ -233,7 +242,7 @@ class RedditClient:
             }
             try:
                 status, resp_headers, raw = await asyncio.to_thread(
-                    _http, url, hdrs, "GET", body
+                    _http, url, hdrs, "GET", body, self.settings
                 )
             except Exception as exc:
                 last_exc = exc

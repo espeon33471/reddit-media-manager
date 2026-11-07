@@ -225,7 +225,10 @@ class SyncService:
                     # maak hem de eerste kandidaat (statische preview blijft fallback).
                     # NB: resolve_external_video leest data.get('url'/'media') — dus de
                     # DATA-dict meedoen, niet de {kind, data}-wrapper (anders leeg).
-                    ext_cands = await resolve_external_video(child.get("data", child))
+                    ext_cands = await resolve_external_video(
+                        child.get("data", child),
+                        proxy=str(self.settings.get("proxy_url") or "").strip() or None,
+                    )
                     if ext_cands:
                         items = ([ext_cands + items[0]] + items[1:]) if items else [ext_cands]
 

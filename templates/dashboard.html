@@ -14,6 +14,7 @@
       <button id="btn-pause">Pauzeer</button>
       <button id="btn-resume">Hervat</button>
       <button id="btn-stop" class="danger">Stop</button>
+      <button id="btn-retry-failed" title="Zet alle mislukte items opnieuw in de wachtrij">Herhaal mislukte</button>
     </div>
   </div>
 </div>
@@ -96,5 +97,13 @@
   document.getElementById("btn-pause").onclick = () => engine("pause");
   document.getElementById("btn-resume").onclick = () => engine("resume");
   document.getElementById("btn-stop").onclick = () => engine("stop");
+  document.getElementById("btn-retry-failed").onclick = async () => {
+    if (!confirm("Alle mislukte items opnieuw in de wachtrij zetten?")) return;
+    try {
+      const r = await RMM.api("/api/queue/retry_failed", { method: "POST" });
+      RMM.toast(`${r.count} items opnieuw in de wachtrij`);
+      renderStatus(await RMM.api("/api/status"));
+    } catch (e) { RMM.toast(e.message, "err"); }
+  };
 </script>
 {% endblock %}

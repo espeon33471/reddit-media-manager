@@ -22,6 +22,10 @@
       <span class="lbl">Max. downloadbandbreedte (MB/s, 0 = onbeperkt)</span>
       <input type="number" id="set-max_bandwidth_mb" min="0" max="10000" placeholder="0">
     </label>
+    <label class="field">
+      <span class="lbl">Proxy (leeg = direct; handig als Reddit je IP blokkeert)</span>
+      <input type="text" id="set-proxy_url" placeholder="http://host:port of socks5://host:port" autocomplete="off" style="width:100%">
+    </label>
   </div>
 
   <div class="panel">
@@ -152,7 +156,7 @@
   async function loadSettings() {
     try {
       const { settings, autosync } = await RMM.api("/api/settings");
-      for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality", "max_bandwidth_mb"]) {
+      for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality", "max_bandwidth_mb", "proxy_url"]) {
         const el = document.getElementById("set-" + k);
         if (el) el.value = (settings[k] ?? "");
       }
@@ -233,7 +237,7 @@
 
   document.getElementById("save-settings").onclick = async () => {
     const payload = {};
-    for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality", "max_bandwidth_mb"]) {
+    for (const k of ["dataroot", "concurrency", "request_interval", "user_agent", "photo_quality", "video_quality", "max_bandwidth_mb", "proxy_url"]) {
       const el = document.getElementById("set-" + k);
       if (el) payload[k] = el.value;
     }

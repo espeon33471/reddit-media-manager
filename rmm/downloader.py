@@ -53,10 +53,7 @@ class PausedError(Exception):
 class MediaDownloader:
     def __init__(self, settings: dict[str, Any]):
         self.settings = settings
-        self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(180.0, connect=20.0),
-            follow_redirects=True,
-        )
+        self._client = self._make_client()
         # Globale start-spacing over alle workers heen (dempt de initieele burst).
         self._spacing = max(2.0, float(settings.get("download_spacing", 2.0)))
         self._space_lock = asyncio.Lock()
@@ -74,6 +71,24 @@ class MediaDownloader:
     )
 
     _REDDIT_HOSTS = ("redd.it", "reddit.com", "redditvideo.com", "redditmedia.com", "redditstatic.com")
+
+    def _make_client(self) -> httpx.AsyncClient:
+        """Nieuwe httpx-client; gebruikt de eventuele proxy uit de settings."""
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(180.0, connect=20.0),
+            follow_redirects=True,
+            proxy=(str(self.settings.get("proxy_url") or "").strip() or None),
+        )
+
+    async def set_proxy(self, proxy: str | None) -> None:
+        """Proxy wijzigen zonder restart (settings wijzigen → nieuwe client)."""
+        old = self._client
+        self._client = self._make_client()
+        try:
+            await old.aclose()
+        except Exception:  # noqa: BLE001 — oude client dichtmaken is nice-to-have
+            pass
+        log.info("Downloader proxy bijgewerkt: %r", proxy)
 
     def _ua(self) -> str:
         """Gebruik de ingestelde UA alleen als die écht browser-achtig is; anders
@@ -167,6 +182,7 @@ class MediaDownloader:
 
         last_err: Exception | None = None
         last_transient = False
+        cdn_403s = 0
         for cand in candidates:
             if should_pause():
                 _remove_quiet(dest_path + ".part")
@@ -178,17 +194,27 @@ class MediaDownloader:
             except HardHTTPError as exc:
                 last_err = exc
                 last_transient = False
+                if exc.status == 403 and self._is_reddit_host(cand):
+                    cdn_403s += 1
                 log.info("Kandidaat %s → %s; probeer volgende", cand, exc)
                 continue
             except DownloadError as exc:
                 last_err = exc
                 last_transient = bool(getattr(exc, "transient", False))
+                if "HTTP 403" in str(exc) and self._is_reddit_host(cand):
+                    cdn_403s += 1
                 log.warning("Kandidaat %s mislukt (%s); probeer volgende", cand, exc)
                 continue
 
-        raise DownloadError(
-            f"Alle kandidaat-URL's mislukt (laatste: {last_err})", transient=last_transient
-        )
+        if cdn_403s and cdn_403s >= len(candidates):
+            msg = (
+                "Reddit CDN blokkeert deze IP (HTTP 403). Stel een proxy in onder "
+                "Instellingen (http://host:port of socks5://host:port), of probeer "
+                "later opnieuw."
+            )
+        else:
+            msg = f"Alle kandidaat-URL's mislukt (laatste: {last_err})"
+        raise DownloadError(msg, transient=last_transient)
 
     async def _download_one(
         self,

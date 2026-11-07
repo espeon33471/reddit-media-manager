@@ -76,11 +76,13 @@ def detect_external_video(data: dict[str, Any]) -> tuple[str, str] | None:
 async def resolve_external_video(
     data: dict[str, Any],
     client: httpx.AsyncClient | None = None,
+    proxy: str | None = None,
 ) -> list[str] | None:
     """Los een externe video-embed op naar geordende MP4-kandidaten (beste eerst).
 
     Retourneert `None` als de post geen RedGifs/Gifer-embed bevat of het oplossen
     faalt (dan valt de engine terug op de statische preview).
+    `proxy` wordt alleen gebruikt als er geen `client` meegegeven wordt.
     """
     hit = detect_external_video(data)
     if not hit:
@@ -101,7 +103,10 @@ async def resolve_external_video(
         ref = "https://www.gifer.com/"
 
     own = client is None
-    http = client or httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
+    http = client or httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, connect=10.0),
+        proxy=(proxy or None),
+    )
     try:
         headers = {
             "User-Agent": _BROWSER_UA,

@@ -446,3 +446,15 @@ class Engine:
         if self.state == "stopped":
             await self.start()
         return True
+
+    async def retry_failed(self) -> int:
+        """Zet ALLE `failed`-items terug op `pending` (bulk-herhaling)."""
+        cur = await self.db.execute(
+            "UPDATE downloads SET status = 'pending', error = NULL, retry_count = 0, "
+            "next_retry_at = NULL WHERE status = 'failed'"
+        )
+        n = cur.rowcount if cur else 0
+        log.info("Herhaal mislukte: %d items teruggezet op pending", n)
+        if n and self.state == "stopped":
+            await self.start()
+        return n
