@@ -17,7 +17,7 @@ from typing import Any, Callable
 import httpx
 
 from .config import load_settings  # noqa: F401
-from .throttle import block_breaker
+from .throttle import cdn_breaker as block_breaker
 
 log = logging.getLogger("rmm.downloader")
 
@@ -208,7 +208,7 @@ class MediaDownloader:
 
             # Circuit-breaker: bij een 403-storm wacht iedereen tot de pauze
             # is afgerold i.p.v. de block te verergeren.
-            breaker_wait = await block_breaker.wait_if_open()
+            breaker_wait = await block_breaker.wait_if_open()  # cdn_breaker
             if breaker_wait > 0:
                 log.info("Breaker-pauze %.0fs afgerold; hervat %s", breaker_wait, url)
 

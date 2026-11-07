@@ -1,19 +1,24 @@
-"""Globele circuit-breaker voor Reddit-403/429-stormen.
+"""Globele circuit-breakers voor Reddit-403/429-stormen.
+
+Twee gescheiden breakers:
+  - `api_breaker`  — voor API-aanroepen (reddit.com/api/…)
+  - `cdn_breaker`  — voor media-downloads (external-preview.redd.it, v.redd.it)
 
 Zonder dit mechanisme pompen alle workers door met 403's (rate-limiting of
 IP-block), verbruiken ze hun retry-quota en eindigen honderden items als
 "failed" terwijl Reddit gewoon even pauze nodig had.
 
 Werking:
-  - `report_block()` wordt aangeroepen bij elke 403/429 (API én downloads).
+  - `report_block()` wordt aangeroepen bij elke 403/429.
   - Zodra er binnen `WINDOW` seconden ≥ `THRESHOLD` blocks zijn, gaat de
     breaker OPEN voor `COOLDOWN` seconden.
-  - `wait_if_open()` wordt vóór nieuwe Reddit-aanroepen aangeroepen; terwijl
+  - `wait_if_open()` wordt vóór nieuwe aanroepen aangeroepen; terwijl
     de breaker open is wachten alle callers tot hij weer gesloten is.
   - `state()` levert de status voor de UI (dashboard: "Reddit blokkeert …").
 
-De breaker is een module-level singleton zodat downloader en API-client
-elkaars blocks delen.
+Door API en CDN te scheiden, blokkeert een CDN-storm (external-preview.redd.it)
+de API-aanroepen (old.reddit.com) niet meer — dus de cookie-check werkt ook
+tijdens download-stormen.
 """
 from __future__ import annotations
 
@@ -30,7 +35,8 @@ MAX_COOLDOWN = 900.0  # elke opeenvolgende trip verlengt de pauze (max 15 min)
 
 
 class BlockBreaker:
-    def __init__(self) -> None:
+    def __init__(self, name: str = "breaker") -> None:
+        self._name = name
         self._blocks: list[float] = []
         self._open_until = 0.0
         self._trips = 0
@@ -50,8 +56,8 @@ class BlockBreaker:
             cooldown = min(COOLDOWN * self._trips, MAX_COOLDOWN)
             self._open_until = now + cooldown
             log.warning(
-                "Reddit-blokker detecteerd (%d blocks/%ds) — pauze %.0fs (trip %d)",
-                len(self._blocks), int(WINDOW), cooldown, self._trips,
+                "[%s] Reddit-blokker detecteerd (%d blocks/%ds) — pauze %.0fs (trip %d)",
+                self._name, len(self._blocks), int(WINDOW), cooldown, self._trips,
             )
             # Wekker zodat de pauze ook afloopt als niemand wacht.
             try:
@@ -95,8 +101,14 @@ class BlockBreaker:
             "open": remaining > 0,
             "cooldown_remaining": round(remaining, 1),
             "trips": self._trips,
+            "name": self._name,
         }
 
 
-# Singleton: gedeeld over downloader en API-client.
-block_breaker = BlockBreaker()
+# Gescheiden breakers: API-calls vs CDN-downloads.
+api_breaker = BlockBreaker(name="api")
+cdn_breaker = BlockBreaker(name="cdn")
+
+# Backward-compat: `block_breaker` verwijst naar de CDN-breaker
+# (de meeste importers in downloader.py gebruiken dit).
+block_breaker = cdn_breaker

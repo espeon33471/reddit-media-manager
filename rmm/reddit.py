@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from .throttle import block_breaker
+from .throttle import api_breaker
 
 log = logging.getLogger("rmm.reddit")
 
@@ -97,16 +97,25 @@ class RedditClient:
         return headers
 
     async def _get_json(
-        self, path: str, method: str = "GET", data: str | None = None
+        self, path: str, method: str = "GET", data: str | None = None,
+        max_attempts: int | None = None,
+        base_delay: float | None = None,
     ) -> Any:
-        """GET/POST naar Reddit met rate-limit + retry; retour JSON."""
+        """GET/POST naar Reddit met rate-limit + retry; retour JSON.
+
+        Args:
+            max_attempts: Override voor MAX_ATTEMPTS (handig voor fast-fail calls).
+            base_delay:  Override voor de backoff-base (standaard: 2.0s per attempt).
+        """
         url = path if path.startswith("http") else f"{self.BASE}{path}"
         body = data.encode("utf-8") if data else None
+        attempts = max_attempts or MAX_ATTEMPTS
+        delay_base = base_delay if base_delay is not None else 2.0
 
         last_exc: Exception | None = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            # Circuit-breaker: pauze afwachten bij een 403/429-storm.
-            await block_breaker.wait_if_open()
+        for attempt in range(1, attempts + 1):
+            # Circuit-breaker (API): pauze afwachten bij een 403/429-storm.
+            await api_breaker.wait_if_open()
             await self._limiter.acquire()
             auth = await self._auth_headers()
             hdrs = {
@@ -123,42 +132,40 @@ class RedditClient:
                 raise
             except Exception as exc:
                 last_exc = exc
-                delay = min(2.0 * attempt, 30.0)
+                delay = min(delay_base * attempt, 30.0)
                 log.warning("Netwerkfout (poging %d/%d): %s — wacht %.1fs",
-                            attempt, MAX_ATTEMPTS, exc, delay)
+                            attempt, attempts, exc, delay)
                 await asyncio.sleep(delay)
                 continue
 
             if status in (429, 503):
-                block_breaker.report_block(status)
+                api_breaker.report_block(status)
                 last_exc = RedditError(f"Reddit HTTP {status} (rate-limiet)")
                 ra = resp_headers.get("retry-after") or resp_headers.get("Retry-After") or "0"
                 try:
                     retry_after = float(ra)
                 except ValueError:
                     retry_after = 0.0
-                delay = max(retry_after, 2.0 * attempt)
+                delay = max(retry_after, delay_base * attempt)
                 log.warning("HTTP %s — probeer opnieuw over %.1fs (poging %d/%d)",
-                            status, delay, attempt, MAX_ATTEMPTS)
+                            status, delay, attempt, attempts)
                 await asyncio.sleep(delay)
                 continue
 
             if status == 403:
                 # 403 = rate-limiting of een IP-block (HTML "Blocked"-pagina).
-                # Niet direct opgeven: langere backoff + breaker, dan pas
-                # de volgende poging — alleen ná alle pogingen een fout.
-                block_breaker.report_block(403)
+                api_breaker.report_block(403)
                 snippet = raw.decode("utf-8", errors="replace")[:200].lower()
                 is_block_page = "blocked" in snippet and "<html" in snippet
                 last_exc = RedditError(
                     "Reddit HTTP 403 (IP/rate-limit geblokkeerd"
                     + (" — 'Blocked'-pagina)" if is_block_page else ")")
                 )
-                if attempt == MAX_ATTEMPTS:
+                if attempt == attempts:
                     break
                 delay = min(15.0 * attempt, 90.0) * (0.8 + random.random() * 0.4)
                 log.warning("HTTP 403 (poging %d/%d) — pauze %.1fs%s",
-                            attempt, MAX_ATTEMPTS, delay,
+                            attempt, attempts, delay,
                             " [Reddit-block-pagina]" if is_block_page else "")
                 await asyncio.sleep(delay)
                 continue
@@ -173,7 +180,6 @@ class RedditClient:
             try:
                 return json.loads(raw)
             except json.JSONDecodeError:
-                # Niet-JSON antwoord (HTML) — waarschijnlijk expired session of redirect naar login-pagina
                 snippet = raw.decode("utf-8", errors="replace")[:150]
                 if "<html" in snippet.lower() or "<!doctype" in snippet.lower() or "login" in snippet.lower():
                     raise RedditError(
@@ -182,7 +188,7 @@ class RedditClient:
                     )
                 return raw.decode("utf-8", errors="replace")
 
-        raise RedditError(f"Reddit niet bereikbaar na {MAX_ATTEMPTS} pogingen: {last_exc}")
+        raise RedditError(f"Reddit niet bereikbaar na {attempts} pogingen: {last_exc}")
 
     # ── publieke API ─────────────────────────────────────────────────
 
@@ -206,15 +212,104 @@ class RedditClient:
         return user
 
     async def verify_session(self) -> dict[str, Any]:
-        """Check of de sessie geldig is en NSFW-toegang werkt."""
-        info = await self.whoami()
-        return {
-            "ok": True,
-            "username": info.get("name", "?"),
-            "id": info.get("id", "?"),
-            "nsfw": bool(info.get("over_18", False)),
-            "karma": info.get("link_karma", 0),
-        }
+        """Check of de sessie geldig is en NSFW-toegang werkt.
+
+        Gebruikt max 2 pogingen met korte delays (fast-fail) zodat de
+        gebruiker snel een duidelijk antwoord krijgt, en niet 90s×5 wacht.
+        """
+        url = f"{self.BASE}/api/me.json"
+        body = None
+        last_exc: Exception | None = None
+
+        for attempt in range(1, 3):  # max 2 pogingen
+            await api_breaker.wait_if_open()
+            await self._limiter.acquire()
+            auth = await self._auth_headers()
+            hdrs = {
+                "User-Agent": str(self.settings.get("user_agent") or ""),
+                "Accept": "application/json",
+                "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
+                **auth,
+            }
+            try:
+                status, resp_headers, raw = await asyncio.to_thread(
+                    _http, url, hdrs, "GET", body
+                )
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 2:
+                    break
+                await asyncio.sleep(3.0)
+                continue
+
+            if status in (429, 503):
+                api_breaker.report_block(status)
+                last_exc = RedditError(
+                    f"Reddit HTTP {status} — rate-limiet actief. Probeer over enkele minuten opnieuw."
+                )
+                if attempt == 2:
+                    break
+                await asyncio.sleep(5.0)
+                continue
+
+            if status == 403:
+                snippet = raw.decode("utf-8", errors="replace")[:200].lower()
+                is_block_page = "blocked" in snippet and "<html" in snippet
+                if is_block_page:
+                    last_exc = RedditError(
+                        "Reddit blokkeert momenteel je IP-adres (rate-limit). "
+                        "Dit is tijdelijk — probeer over een paar minuten opnieuw. "
+                        "Je cookie is mogelijk nog steeds geldig."
+                    )
+                else:
+                    last_exc = RedditError(
+                        "Reddit HTTP 403 — sessie mogelijk verlopen of IP geblokkeerd. "
+                        "Probeer een verse cookie of wacht enkele minuten."
+                    )
+                api_breaker.report_block(403)
+                if attempt == 2:
+                    break
+                await asyncio.sleep(3.0)
+                continue
+
+            if status >= 400:
+                try:
+                    err = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    err = raw.decode("utf-8", errors="replace")[:200]
+                raise RedditError(f"Reddit HTTP {status}: {err}")
+
+            # Succes
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                snippet = raw.decode("utf-8", errors="replace")[:150]
+                if "<html" in snippet.lower() or "login" in snippet.lower():
+                    raise RedditError(
+                        "Sessie is verlopen of ongeldig (Reddit verwees naar login-pagina). "
+                        "Plak een verse sessie-cookie via Settings."
+                    )
+                raise RedditError("Onverwacht (niet-JSON) antwoord van Reddit bij cookie-check.")
+
+            if isinstance(data, list):
+                if not data:
+                    raise RedditError("Leeg antwoord van Reddit — sessie mogelijk ongeldig.")
+                data = data[0]
+            if not isinstance(data, dict):
+                raise RedditError(f"Onverwacht antwoordtype ({type(data).__name__}) — sessie ongeldig.")
+
+            user = data.get("data", data)
+            if not isinstance(user, dict):
+                user = data
+            return {
+                "ok": True,
+                "username": user.get("name", "?"),
+                "id": user.get("id", "?"),
+                "nsfw": bool(user.get("over_18", False)),
+                "karma": user.get("link_karma", 0),
+            }
+
+        raise last_exc or RedditError("Cookie-check mislukt — probeer het later opnieuw.")
 
     async def listing(
         self, subreddit: str, sort: str = "new", limit: int = 25, after: str | None = None
