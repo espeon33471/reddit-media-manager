@@ -1,6 +1,7 @@
 """Sync-logica: posts ophalen, media detecteren, in de queue zetten."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -49,6 +50,10 @@ class SyncService:
         self.settings = settings
         self.reddit = reddit
         self.dataroot_fn = dataroot_fn
+        # Per-subreddit sync-lock: handmatige sync en auto-sync van dezelfde
+        # subreddit mogen niet tegelijk draaien (tussen de dedup-check en het
+        # inplannen zouden anders dubbele rijen ontstaan).
+        self._sub_locks: dict[str, asyncio.Lock] = {}
 
     # -- subbeheer -------------------------------------------------------------
     async def import_subs(self, text: str) -> dict[str, Any]:
@@ -123,11 +128,17 @@ class SyncService:
 
     # -- sync --------------------------------------------------------------------
     async def sync_sub(self, sub: str, mode: str = "new") -> dict[str, Any]:
-        """Nieuwe posts ophalen en in de queue zetten.
+        """Nieuwe posts ophalen en in de queue zetten (met per-subreddit lock).
 
         mode='new' → vanaf laatste cursor; mode='all' → vanaf het begin.
         """
         sub = sanitize_sub(sub)
+        lock = self._sub_locks.setdefault(sub, asyncio.Lock())
+        async with lock:
+            return await self._sync_sub(sub, mode)
+
+    async def _sync_sub(self, sub: str, mode: str = "new") -> dict[str, Any]:
+        """Interne sync-implementatie (roep via sync_sub aan voor de lock)."""
         sub_row = await self.db.one("SELECT * FROM subs WHERE sub = ?", (sub,))
         if sub_row is None:
             raise ValueError(f"Subreddit '{sub}' staat niet in de lijst. Importeer hem eerst.")
@@ -308,6 +319,24 @@ class SyncService:
         except RedditError:
             # Melding ook zichtbaar in de queue (spec).
             await self._record_sync_error(sub, "Sync mislukt (zie logs).")
+            # Cursor WÉL opslaan: de volgende sync hervat bij de laatste
+            # goed verwerkte pagina i.p.v. alles vanaf de oude cursor
+            # opnieuw ophalen — dat verslacht het rate-budget en faalt op
+            # hetzelfde punt (geen progressie). Reeds ingeplande posts
+            # worden bij de nieuwe run door de dedup overgeslagen.
+            try:
+                await self.db.execute(
+                    """
+                    INSERT INTO sub_state(sub, last_after_cursor, last_post_id, last_synced_at)
+                    VALUES (?, ?, NULL, ?)
+                    ON CONFLICT(sub) DO UPDATE SET
+                      last_after_cursor = COALESCE(excluded.last_after_cursor, sub_state.last_after_cursor),
+                      last_synced_at = excluded.last_synced_at
+                    """,
+                    (sub, cursor, now_iso()),
+                )
+            except Exception:  # noqa: BLE001 — de originele fout blijft dominant
+                log.exception("Kon cursor niet opslaan na sync-fout")
             raise
 
         await self.db.execute(

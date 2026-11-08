@@ -40,7 +40,7 @@ def convert_photo(src_path: str, target_format: str = "jpg", quality: int = 95) 
     Retourneert het nieuwe bestandspad. Als het bestandsformaat al matcht,
     wordt het pad ongewijzigd teruggegeven (geen kopie).
     """
-    from PIL import Image
+    from PIL import Image, ImageOps
 
     target = _target_ext(target_format)
     src_ext = os.path.splitext(src_path)[1].lstrip(".").lower()
@@ -54,14 +54,19 @@ def convert_photo(src_path: str, target_format: str = "jpg", quality: int = 95) 
     try:
         img = Image.open(src_path)
 
+        # EXIF-orientatie écht toepassen vóór conversie/opschrijven.
+        # Zonder deze stap blijven foto's van telefoons (orientation-tag)
+        # draaiend/verticaal in het output-bestand staan.
+        transposed = ImageOps.exif_transpose(img)
+        if transposed is not None:
+            img = transposed
+
         # JPG ondersteunt geen transparantie → flatten op wit
         if target in ("jpg", "jpeg") and img.mode in ("RGBA", "LA", "P"):
             img = img.convert("RGBA")
             background = Image.new("RGB", img.size, (255, 255, 255))
             background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
             img = background
-        elif target in ("jpg", "jpeg") and img.mode == "P":
-            img = img.convert("RGB")
         elif target == "png" and img.mode == "RGB":
             pass  # PNG kan RGB
         elif target == "webp":
