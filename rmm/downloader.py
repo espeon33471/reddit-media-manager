@@ -152,7 +152,9 @@ class MediaDownloader:
         anders snel in een 429-rate-limit duwt."""
         if self._spacing <= 0:
             return
-        loop = asyncio.get_event_loop()
+        # get_running_loop: get_event_loop() is deprecated (3.10+) en kan in de
+        # toekomst falen; hier draait altijd een event loop al.
+        loop = asyncio.get_running_loop()
         async with self._space_lock:
             now = loop.time()
             wait = self._last_start + self._spacing - now
