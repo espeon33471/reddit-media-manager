@@ -641,6 +641,19 @@ async def api_gallery_delete(payload: dict) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="ids moeten getallen zijn") from exc
     if not ids:
         raise HTTPException(status_code=400, detail="ids vereist")
+    # Race-guard (zelfde als api_history_delete): rijen die nu gedownload worden
+    # blijven bestaan — anders faalt de slot-UPDATE van de engine stil en staat er
+    # een onvindbaar, onbeweersbaar orfaanbestand op disk (of verdwijnt een
+    # half afgeronde download zonder dat de teller het telt).
+    active = await state.db.one(
+        f"SELECT COUNT(*) AS c FROM downloads WHERE id IN ({','.join('?' * len(ids))}) AND status = 'running'",
+        tuple(ids),
+    )
+    if active and active["c"] > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Eén of meer items worden nu gedownload — pauzeer de downloads en probeer het opnieuw",
+        )
     keep_files = bool((payload or {}).get("keep_files"))
     base = Path(resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))).resolve()
     ph = ",".join("?" * len(ids))

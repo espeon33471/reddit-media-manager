@@ -118,16 +118,24 @@ const RMM = {
 
         // Get all data rows
         const rows = Array.from(tbody.querySelectorAll("tr")).filter(r => r.dataset.sortable !== "false");
+        // Vergelijkers: puur getal, of getal + eenheid (B/KB/MB/GB). Alles
+        // anders (bv. datums "5-6-2026 10:00") alfabetisch — parseFloat gaf
+        // daar vroeger de verkeerde volgorde ("5-6-…" < "12-1-…" → 5 < 12).
+        const NUM = /^[+-]?\d+(?:\.\d+)?$/;
+        const SIZE = /^([+-]?\d+(?:\.\d+)?)\s*(B|KB|MB|GB)$/i;
+        const sortVal = (cell) => {
+          if (NUM.test(cell)) return { t: 0, v: parseFloat(cell) };
+          const m = cell.match(SIZE);
+          if (m) return { t: 1, v: parseFloat(m[1]) * Math.pow(1024, { B: 0, KB: 1, MB: 2, GB: 3 }[m[2].toUpperCase()]) };
+          return { t: 2, s: cell };
+        };
         rows.sort((a, b) => {
           const cellA = a.cells[colIdx]?.textContent.trim() || "";
           const cellB = b.cells[colIdx]?.textContent.trim() || "";
-          // Try numeric comparison first
-          const numA = parseFloat(cellA);
-          const numB = parseFloat(cellB);
-          if (!isNaN(numA) && !isNaN(numB) && cellA !== "" && cellB !== "") {
-            return (numA - numB) * sortDir;
-          }
-          return cellA.localeCompare(cellB, "nl") * sortDir;
+          const A = sortVal(cellA), B = sortVal(cellB);
+          if (A.t === 0 && B.t === 0) return (A.v - B.v) * sortDir;
+          if (A.t === 1 && B.t === 1) return (A.v - B.v) * sortDir;
+          return (A.s || "").localeCompare(B.s || "", "nl") * sortDir;
         });
         rows.forEach(r => tbody.appendChild(r));
       });
