@@ -365,12 +365,22 @@ class Engine:
                 dest = candidate
 
         # Oud bestand opruimen (her-download na naamwijziging → anders orfaan).
+        # Let op: een ander item (bv. via sha256-dedup overgeslagen) kan op
+        # hetzelfde bestand wijzen — die mag dan NIET weg, anders verliest
+        # die rij haar media (404 in de galerij).
         old_local = row.get("local_path")
         if old_local:
             try:
                 if os.path.exists(old_local) and os.path.abspath(old_local) != os.path.abspath(dest):
-                    os.remove(old_local)
-                    log.info("Oud bestand opgeruimd: %s", old_local)
+                    shared = await self.db.one(
+                        "SELECT id FROM downloads WHERE local_path = ? AND id != ? LIMIT 1",
+                        (old_local, row["id"]),
+                    )
+                    if shared is not None:
+                        log.info("Oud bestand wordt gedeeld met ander item — niet verwijderd: %s", old_local)
+                    else:
+                        os.remove(old_local)
+                        log.info("Oud bestand opgeruimd: %s", old_local)
             except OSError:
                 log.debug("Kon oud bestand niet verwijderen: %s", old_local, exc_info=True)
 
