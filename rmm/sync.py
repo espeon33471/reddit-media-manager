@@ -242,15 +242,21 @@ class SyncService:
                         )
                         continue
 
-                    # File-type filtering op basis van settings (dict of legacy comma-string)
+                    # File-type filtering op basis van settings (dict of legacy comma-string).
+                    # Filter PER KANDIDAAT: een item kan meerdere kandidaten hebben
+                    # (bijv. externe MP4-video + statische foto-preview). Alleen de
+                    # eerste kandidaat checken zou een MP4 laten doorlopen als video
+                    # uitgeschakeld staat (of omgekeerd).
                     enabled_types = self._enabled_file_types()
                     kept_items: list[list[str]] = []
                     for cands in items:
-                        mtype = classify_media(cands[0])
-                        if mtype is None:
-                            kept_items.append(cands)  # onbekend → toch toevoegen
-                        elif mtype in enabled_types:
-                            kept_items.append(cands)
+                        kept: list[str] = []
+                        for cand in cands:
+                            mtype = classify_media(cand)
+                            if mtype is None or mtype in enabled_types:
+                                kept.append(cand)
+                        if kept:
+                            kept_items.append(kept)
 
                     if not kept_items:
                         await self.db.execute(
@@ -292,6 +298,10 @@ class SyncService:
                     break
                 # Geen enkele nieuwe post in deze paginade → verder bladeren is zinloos.
                 if new_in_page == 0:
+                    break
+                # Guard tegen oneindige loop: Reddit kan bij rate-limits of leemtes
+                # dezelfde 'after'-cursor teruggeven (zelfde pagina herhaald).
+                if next_cursor == cursor:
                     break
                 cursor = next_cursor
 
