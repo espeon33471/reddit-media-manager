@@ -623,11 +623,18 @@ async def api_dedup_delete(payload: dict) -> dict[str, Any]:
             "SELECT id FROM downloads WHERE id != ? AND local_path = ?", (item_id, local_path)
         )
         if not others:
-            try:
-                Path(local_path).unlink()
-                removed = 1
-            except OSError as exc:
-                log.warning("Dedup: bestand verwijderen mislukt (%s): %s", local_path, exc)
+            # Pad-guard (zelfde als galerie/delete + history/delete): alleen bestanden
+            # binnen de dataroot verwijderen, nooit absolute/..-paden.
+            base = Path(resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))).resolve()
+            target = (base / local_path).resolve()
+            if not target.is_relative_to(base) or not target.is_file():
+                target = None
+            if target is not None:
+                try:
+                    target.unlink()
+                    removed = 1
+                except OSError as exc:
+                    log.warning("Dedup: bestand verwijderen mislukt (%s): %s", local_path, exc)
     await state.db.execute("DELETE FROM downloads WHERE id = ?", (item_id,))
     log.info("Dedup: rij %d verwijderd (bestand: %d)", item_id, removed)
     return {"ok": True, "file_removed": removed}
@@ -846,7 +853,9 @@ async def api_media_thumbnail(path: str) -> Response:
     if target.suffix.lower() not in _PHOTO_EXTS:
         raise HTTPException(status_code=400, detail="Niet-ondersteund afbeeldingsformaat")
     try:
+        from PIL import ImageOps  # EXIF-oriëntatie toepassen, anders draait de thumb niet mee
         with Image.open(target) as img:
+            img = ImageOps.exif_transpose(img) or img
             img.thumbnail((400, 400))
             if img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
