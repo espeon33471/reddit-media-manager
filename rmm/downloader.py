@@ -298,6 +298,12 @@ class MediaDownloader:
                 os.replace(tmp_path, dest_path)
                 return sha.hexdigest(), total
 
+            except asyncio.CancelledError:
+                # Stop/pauze via engine-cancellation: ruim het .part-bestand op
+                # zodat er geen orphaan achterblijft (BaseException slaat de
+                # except-branches hieronder over).
+                _remove_quiet(tmp_path)
+                raise
             except PausedError:
                 _remove_quiet(tmp_path)
                 raise

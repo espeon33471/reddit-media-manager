@@ -146,7 +146,23 @@ async def convert_video(src_path: str, target_format: str = "mp4", crf: int = 18
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    _, stderr = await proc.communicate()
+    try:
+        _, stderr = await proc.communicate()
+    except asyncio.CancelledError:
+        # Cancellation (stop/pauze): ffmpeg moet dood en het half geschreven
+        # doelbestand opgeruimd, anders kan het orphaan-proces later het
+        # (nieuwe) bronbestand verwijderen.
+        proc.kill()
+        try:
+            await proc.wait()
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+        if os.path.exists(dst_path):
+            try:
+                os.remove(dst_path)
+            except OSError:
+                pass
+        raise
 
     if proc.returncode != 0:
         err_msg = stderr.decode(errors="replace")[-500:] if stderr else "onbekende fout"
