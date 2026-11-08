@@ -423,6 +423,18 @@ async def api_history_delete(payload: dict) -> dict[str, Any]:
     post_id = str((payload or {}).get("post_id", "")).strip()
     if not sub or not post_id:
         raise HTTPException(status_code=400, detail="sub en post_id vereist")
+    # Race-guard: als de engine deze post op dit moment downloadt, moet de DB-rij
+    # blijven bestaan (anders faalt de slot-UPDATE stil en blijft het bestand op
+    # disk orfaan staan — onvindbaar en onbeweersbaar vanuit de UI).
+    active = await state.db.one(
+        "SELECT COUNT(*) AS c FROM downloads WHERE sub = ? AND post_id = ? AND status = 'running'",
+        (sub, post_id),
+    )
+    if active and active["c"] > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Deze post wordt nu gedownload — pauzeer de downloads en probeer het opnieuw",
+        )
     # Bestanden alleen verwijderen als géén andere rij (bv. in een andere sub)
     # dezelfde bestandsreferentie heeft.
     root_p = Path(resolve_dataroot(state.settings.get("dataroot", DEFAULT_DATAROOT))).resolve()

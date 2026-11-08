@@ -351,35 +351,3 @@ class RedditClient:
         if isinstance(result, dict) and "data" in result:
             return result["data"]
         return result
-
-    async def resolve_media(self, post: dict[str, Any]) -> list[str]:
-        """Haal de media-URLs uit een post op."""
-        urls: list[str] = []
-        data = post.get("data", post)
-        media = data.get("media", {}) or {}
-
-        if media:
-            for kind in ("image", "reddit_video", "gif"):
-                entry = media.get(kind)
-                if isinstance(entry, dict):
-                    src = entry.get("fallback_url") or entry.get("poster")
-                    if src:
-                        urls.append(src)
-            # gallery items
-            gallery = data.get("gallery_data")
-            if isinstance(gallery, dict):
-                for item in gallery.get("items", []):
-                    mid = item.get("media_id")
-                    if mid:
-                        m = media.get(f"id_{mid}")
-                        if isinstance(m, dict):
-                            src = m.get("fallback_url") or m.get("poster")
-                            if src:
-                                urls.append(src)
-
-        url = data.get("url")
-        if url and url not in urls and not url.startswith(
-            ("https://www.reddit.com", "https://reddit.com")
-        ):
-            urls.append(url)
-        return urls
