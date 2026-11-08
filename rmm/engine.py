@@ -343,9 +343,26 @@ class Engine:
             if idx > 0:
                 stem = f"{stem[:70]}_{idx + 1}"
             dest = os.path.join(directory, f"{stem}.{ext}")
-            # Collision-guard: ander bestand met die naam bestaat al → post_id erachter
+            # Collision-guard 1 (tussen posts): twee verschillende posts met dezelfde
+            # titel in dezelfde sub zouden op hetzelfde bestand (of dezelfde .part)
+            # eindigen → stille overschrijving/corruptie. De downloads-rijen bestaan
+            # vóór de download begint, dus dit vangt ook concurrente downloads af.
+            if title:
+                dup = await self.db.one(
+                    "SELECT id FROM downloads WHERE sub = ? AND post_id != ? AND post_title = ? LIMIT 1",
+                    (sub, post_id, title),
+                )
+                if dup is not None:
+                    dest = os.path.join(directory, f"{stem[:60]}_{post_id}.{ext}")
+            # Collision-guard 2 (disk): naam is bezet → post_id erachter (+ uniek nummer)
             if os.path.exists(dest):
-                dest = os.path.join(directory, f"{stem[:60]}_{post_id}.{ext}")
+                base_name = f"{stem[:60]}_{post_id}"
+                candidate = os.path.join(directory, f"{base_name}.{ext}")
+                n = 1
+                while os.path.exists(candidate):
+                    candidate = os.path.join(directory, f"{base_name}_{n}.{ext}")
+                    n += 1
+                dest = candidate
 
         # Oud bestand opruimen (her-download na naamwijziging → anders orfaan).
         old_local = row.get("local_path")
