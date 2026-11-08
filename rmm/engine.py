@@ -506,7 +506,8 @@ class Engine:
 
     async def retry_item(self, item_id: int) -> bool:
         row = await self.db.one(
-            "SELECT id FROM downloads WHERE id = ? AND status IN ('failed', 'skipped')", (item_id,)
+            "SELECT id FROM downloads WHERE id = ? AND status IN ('failed', 'skipped') AND url != ''",
+            (item_id,),
         )
         if row is None:
             return False
@@ -522,8 +523,10 @@ class Engine:
         """Zet ALLE `failed`-items terug op `pending` (bulk-herhaling), met een
         kleine stagger zodat ze niet als één storm tegelijk de CDN raken —
         dat veroorzaakt een 403/429-cascade en nog méér failures."""
+        # Rijen met lege URL (bijv. 'sync-fout'-regelingen) zijn geen echte
+        # downloads en kunnen nooit slagen — niet opnieuw in de wachtrij zetten.
         rows = await self.db.query(
-            "SELECT id FROM downloads WHERE status = 'failed' ORDER BY id"
+            "SELECT id FROM downloads WHERE status = 'failed' AND url != '' ORDER BY id"
         )
         for i, r in enumerate(rows):
             await self.db.execute(

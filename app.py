@@ -357,7 +357,10 @@ async def api_queue(limit: int = 500) -> dict[str, Any]:
 async def api_queue_retry(item_id: int) -> dict[str, Any]:
     assert state.engine is not None
     if not await state.engine.retry_item(item_id):
-        raise HTTPException(status_code=404, detail="Item niet gevonden of niet in status failed/skipped")
+        raise HTTPException(
+            status_code=404,
+            detail="Item niet gevonden, niet herhaalbaar (geen download-URL), of niet in status failed/skipped",
+        )
     return {"ok": True}
 
 
