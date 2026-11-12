@@ -21,7 +21,7 @@ NSFW/age-gated en private subreddits worden ondersteund via je eigen Reddit-sess
 - **Galerij massaal beheren**: items selecteren en in één keer **verwijderen** (optioneel bestanden op schijf behouden) of **verplaatsen** naar een andere subreddit
 - **Galerij-thumbnails**: foto's laden als compacte thumbnails (max. 400 px), lightbox toont altijd het origineel
 - **Bandbreedte-limiet**: maximale download-snelheid (MB/s), 0 = onbeperkt
-- **Vriendelijke rate-limiting**: 6 s tussen API-aanroepen, concurrentie 4, backoff bij 429/503
+- **Vriendelijke rate-limiting**: 6 s tussen API-aanroepen, concurrentie instelbaar (1–16, standaard 4), backoff bij 429/503
 
 ---
 
@@ -84,7 +84,8 @@ uvicorn app:app --host 127.0.0.1 --port 8000
 
 **Details:**
 
-- **Config (`/config`)**: `settings.json`, `state.db` en `app.log` — de toestand
+- **Config (`/config`)**: `settings.json`, `cookies.json` (sessie-cookie,
+  permissie `600`), `state.db` en `app.log` — de toestand
   van de app zelf. Volume `rmm-config` bewaart ze.
 - **Media (`/data`)**: daarin staan de gedownloade bestanden
   (`/data/u_<sub>/…`). Volume `rmm-data` bewaart ze.
@@ -111,8 +112,10 @@ app ook NSFW/age-gated en private subreddits lezen.
 3. Kopieer de waarde van `reddit_session` (optioneel ook `loid`).
 4. Plak die in **Settings → Reddit (sessie-cookie)** en sla op. De app
    verifieert direct via `GET /api/v1/me` en slaat de cookie **lokaal** op in
-   `settings.json` (in het config-volume `/config`). De waarde wordt nooit verstuurd naar
-   een andere server dan reddit.com.
+   `cookies.json` met permissie `600` (in het config-volume `/config`). De waarde wordt
+   nooit verstuurd naar een andere server dan reddit.com.
+   Alternatief: omgevingvariabelen `RMM_REDDIT_USERNAME`, `RMM_REDDIT_SESSION`,
+   `RMM_REDDIT_LOID` (hoge voorkeur boven het bestand).
 
 > Plakken in de vorm `reddit_session=eyJ…` wordt ook herkend.
 > Sessie verloopt of wachtwoord gewijzigd? → nieuwe cookie plakken.
@@ -210,6 +213,9 @@ Bestandsnamen worden gesaneerd (geen spaties/special chars).
   (png/webp/jpg) is dus niet bepalend voor de opslag.
 - **Video's** → MP4 (H.264, `-preset slow`, instelbare **CRF 18** ≈ visueel
   verliesloos), met audio (AAC) en `+faststart`.
+  Ook mogelijk: **webm** (VP9 + Opus) of **mkv** (H.264) — zet `video_format`
+  in Settings. De CRF-knop geldt voor beide; VP9 gebruikt een gescheiden,
+  lager cap-gebied (0–30) omdat de VP9-schaal anders loopt dan H.264 (0–51).
 - **GIFs** → standaard **blijven geanimeerde GIFs** (`gif_mode: keep`);
   `gif_mode: convert` zet ze om naar het video-formaat.
 - Conversie gebeurt pas **na** een geslaagde download (sha256-gecontroleerd);
@@ -221,8 +227,13 @@ Bestandsnamen worden gesaneerd (geen spaties/special chars).
 2. `data.preview.images[].source.url` → afbeeldingen/GIFs
    (`:placeholder` wordt `:medium`);
 3. `post_url` eindigt op `.jpg .jpeg .png .webp .gif .mp4 .mov .m4v` → directe link.
+4. **Externe video-embeds** (RedGifs / Gifer): `rmm/external.py` herkent de
+   embed-URL in de post (`redgifs.com/watch/{id}` of `gifer.com/{id}`), haalt
+   de watch-pagina op en extrahet de `media.redgifs.com`/`media.gifer.com` MP4,
+   zodat de animerde GIF full-res gedownload wordt (de statische `.jpeg`-preview
+   blijft als fallback).
 
-Geen van de drie → post wordt geteld als **skipped** ("geen media"), niet als fout.
+Geen van de vier → post wordt geteld als **skipped** ("geen media"), niet als fout.
 
 ## Deduplicatie (SQLite)
 
@@ -250,7 +261,7 @@ Database `state.db` in de configmap (in Docker: `/config/state.db`). Tabellen:
 | `concurrency` | `4` | Aantal gelijktijdige downloads |
 | `request_interval` | `6.0` s | Wachtijd tussen Reddit-API-aanroepen |
 | `user_agent` | browser-UA | User-Agent voor alle requests |
-| `reddit_session` / `reddit_loid` | — | Sessie-cookie (inloggen) |
+| `reddit_session` / `reddit_loid` | — | Sessie-cookie (inloggen) — opgeslagen in `cookies.json` (0600); ook via `RMM_REDDIT_SESSION`/`RMM_REDDIT_LOID` |
 | `file_types` | photo+video+gif | Welke types downloaden |
 | `photo_format` | `jpeg` | Doel-formaat foto's |
 | `video_format` | `mp4` | Doel-formaat video's |
@@ -313,7 +324,8 @@ reddit-media-manager/
 │   ├── reddit.py          # API-client: sessie-cookie-auth, rate-limit, retry, paginatie
 │   ├── media.py           # media-extractie per post
 │   ├── downloader.py      # gestreamde downloads, sha256, pauze-check
-│   ├── convert.py         # conversie foto→JPEG / video→MP4 / GIF (ffmpeg)
+│   ├── convert.py         # conversie foto→JPEG / video→MP4|webm|mkv / GIF (ffmpeg)
+│   ├── external.py        # RedGifs/Gifer embed-detectie + MP4-URL oplossen
 │   ├── sync.py            # sync-logica + opslagstructuur + subbeheer
 │   └── util.py            # logging, sanitiseren, tijdsstempels
 ├── templates/             # Jinja2-pagina's (dashboard/subs/history/queue/gallery/settings)

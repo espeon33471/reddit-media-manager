@@ -65,11 +65,13 @@ CREATE TABLE IF NOT EXISTS settings (
 
 
 class DB:
-    """Dunne async wrapper om aiosqlite met rijen als dict."""
+    """Async wrapper om aiosqlite. Writes via een gedeelde connection;
+    reads via een aparte read-only connection (WAL-mode maakt dit veilig)."""
 
     def __init__(self, path: str):
         self.path = path
         self.conn: Optional[aiosqlite.Connection] = None
+        self.ro_conn: Optional[aiosqlite.Connection] = None
 
     async def connect(self) -> None:
         self.conn = await aiosqlite.connect(self.path)
@@ -95,11 +97,17 @@ class DB:
                 pass  # kolom bestaat al
         await self.conn.execute("PRAGMA journal_mode=WAL")
         await self.conn.commit()
+        # Read-only connection voor select-queries (concurrente reads zonder write-lock).
+        self.ro_conn = await aiosqlite.connect(self.path)
+        self.ro_conn.row_factory = aiosqlite.Row
 
     async def close(self) -> None:
         if self.conn is not None:
             await self.conn.close()
             self.conn = None
+        if self.ro_conn is not None:
+            await self.ro_conn.close()
+            self.ro_conn = None
 
     async def execute(self, sql: str, params: tuple = ()) -> aiosqlite.Cursor:
         assert self.conn is not None, "DB niet geopend"
@@ -108,8 +116,11 @@ class DB:
         return cur
 
     async def query(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
-        assert self.conn is not None, "DB niet geopend"
-        cur = await self.conn.execute(sql, params)
+        # Read-only connection voor SELECT-queries (WAL maakt dit veilig
+        # naast schrijfgeschiedenissen op de hoofd-connection).
+        conn = self.ro_conn or self.conn
+        assert conn is not None, "DB niet geopend"
+        cur = await conn.execute(sql, params)
         rows = await cur.fetchall()
         await cur.close()
         return [dict(r) for r in rows]

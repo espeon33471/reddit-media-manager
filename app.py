@@ -79,7 +79,11 @@ async def autosync_loop() -> None:
     stilstaat; als er nieuw werk is en de engine stilstaat, wordt hij gestart.
     """
     while True:
-        await asyncio.sleep(20)
+        # Actieve auto-sync: 20 s polling. Geen participants: 120 s (bespaart CPU).
+        has_participants = bool(await state.db.query(
+            "SELECT 1 FROM subs WHERE enabled = 1 AND auto_sync = 1 LIMIT 1"
+        )) or int(state.settings.get("auto_sync_minutes", 0) or 0) > 0
+        await asyncio.sleep(20 if has_participants else 120)
         try:
             if state.engine is None or state.sync is None:
                 continue
@@ -338,17 +342,26 @@ async def api_sub_sync(sub: str, payload: dict) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- queue
 @app.get("/api/queue")
-async def api_queue(limit: int = 500) -> dict[str, Any]:
+async def api_queue(limit: int = 500, q: Optional[str] = None) -> dict[str, Any]:
     limit = max(1, min(limit, 2000))
+    where = ""
+    params: list[Any] = []
+    if q:
+        where = (
+            " WHERE post_title LIKE ? OR url LIKE ? OR sub LIKE ? OR post_id LIKE ?"
+        )
+        like = f"%{q}%"
+        params.extend([like, like, like, like])
     rows = await state.db.query(
-        """
+        f"""
         SELECT id, sub, post_id, url, status, attempts, error, downloaded_at,
-               post_title, bytes_done
+               post_title, bytes_done, retry_count, next_retry_at
         FROM downloads
+        {where}
         ORDER BY id DESC
         LIMIT ?
         """,
-        (limit,),
+        tuple(params + [limit]),
     )
     return {"items": rows}
 
@@ -760,6 +773,7 @@ async def api_reddit_verify() -> dict[str, Any]:
 async def api_media(
     sub: Optional[str] = None,
     type: Optional[str] = None,
+    q: Optional[str] = None,
     limit: int = 200,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -782,6 +796,10 @@ async def api_media(
         exts = ext_map[type]
         where_extra += " AND (" + " OR ".join(["LOWER(local_path) LIKE ?" for _ in exts]) + ")"
         params.extend([f"%{e}" for e in exts])
+    if q:
+        where_extra += " AND (post_title LIKE ? OR url LIKE ? OR sub LIKE ?)"
+        like = f"%{q}%"
+        params.extend([like, like, like])
 
     sql = (
         "SELECT local_path, sub, post_id, post_date, url, downloaded_at, post_title, post_author, bytes_done "

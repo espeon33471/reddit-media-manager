@@ -92,12 +92,24 @@ class SyncService:
         if min_score is not None:
             min_score = max(0, int(min_score))
         auto_sync_minutes = row["auto_sync_minutes"] if auto_sync_minutes is None else max(0, int(auto_sync_minutes))
+        sort_changed = (sort != row["sort"])
         await self.db.execute(
             "UPDATE subs SET enabled = ?, max_posts = ?, date_from = ?, sort = ?, auto_sync = ?, "
             "min_score = ?, nsfw_only = ?, auto_sync_minutes = ? WHERE sub = ?",
             (enabled, max_posts, date_from, sort, auto_sync, min_score, nsfw_only, auto_sync_minutes, sub),
         )
-        return await self.get_sub(sub)  # type: ignore[return-value]
+        if sort_changed:
+            # Reset de cursor zodat de volgende 'new'-sync opnieuw vanaf het
+            # begin van de nieuwe sort-order scant (hot→top verandert de
+            # volgorde; zonder reset zou de cursor in het midden van de oude
+            # hot-lijst zitten en nieuwe top-posts nooit bereikt worden).
+            await self.db.execute(
+                "UPDATE sub_state SET last_after_cursor = NULL, last_auto_sync = NULL WHERE sub = ?",
+                (sub,),
+            )
+        result = await self.get_sub(sub)  # type: ignore[return-value]
+        result["sort_changed"] = sort_changed
+        return result
 
     async def delete_sub(self, sub: str) -> None:
         sub = sanitize_sub(sub)
@@ -307,8 +319,10 @@ class SyncService:
                 next_cursor = listing["after"]
                 if not next_cursor:
                     break
-                # Geen enkele nieuwe post in deze paginade → verder bladeren is zinloos.
-                if new_in_page == 0:
+                # Na de eerste pagina: geen enkele nieuwe post in deze paginade
+                # → verder bladeren is zinloos. De eerste page wordt altijd
+                # volledig geëvalueerd, ook bij een herhaalde sync.
+                if new_in_page == 0 and summary["pages"] >= 2:
                     break
                 # Guard tegen oneindige loop: Reddit kan bij rate-limits of leemtes
                 # dezelfde 'after'-cursor teruggeven (zelfde pagina herhaald).

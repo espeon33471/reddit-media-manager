@@ -25,7 +25,10 @@
       <button id="qf-rate" class="small">Rate-limited</button>
       <button id="qf-other" class="small">Andere fouten</button>
     </div>
-    <span id="qf-count" class="small"></span>
+    <div class="row" style="gap:6px;flex:1;justify-content:flex-end">
+      <input type="search" id="q-search" class="small" placeholder="Zoek op titel, URL, sub of post-id…" style="max-width:320px">
+      <span id="qf-count" class="small"></span>
+    </div>
   </div>
 </div>
 
@@ -56,6 +59,7 @@
 <script>
   window._queueItems = [];
   window._queueFilter = "all";
+  window._queueQ = "";
 
   function errorKind(it) {
     const e = it.error ? String(it.error) : "";
@@ -77,6 +81,11 @@
       body.innerHTML = rows.map(it => {
         const retryable = it.status === "failed" || it.status === "skipped";
         const kind = errorKind(it);
+        let retryNote = "";
+        if (it.next_retry_at && it.status === "pending") {
+          const secs = Math.max(0, Math.round((it.next_retry_at - Date.now()/1000) / 60));
+          retryNote = ` <span class="badge" title="Automatische herpoging gepland">herpoging over ~${secs} min</span>`;
+        }
         const errCell = kind === "404"
           ? '<span class="badge" title="Post niet meer beschikbaar">404 — post niet meer beschikbaar</span>'
           : RMM.esc(it.error || "");
@@ -89,7 +98,7 @@
           <td><span class="badge s-${it.status}">${it.status}</span></td>
           <td class="num small">${it.bytes_done > 0 ? RMM.fmtBytes(it.bytes_done) : "—"}</td>
           <td class="num">${it.attempts ?? 0}</td>
-          <td class="small clamp" title="${RMM.esc(it.error)}">${errCell}</td>
+          <td class="small clamp" title="${RMM.esc(it.error)}">${errCell}${retryNote}</td>
           <td>${retryable ? `<button class="small b-retry" data-id="${it.id}">Opnieuw</button>` : (it.status === "done" ? "✓" : "")}</td>
         </tr>`;
       }).join("");
@@ -118,7 +127,9 @@
 
   async function loadQueue() {
     try {
-      const { items } = await RMM.api("/api/queue?limit=500");
+      const params = new URLSearchParams({ limit: "500" });
+      if (window._queueQ) params.set("q", window._queueQ);
+      const { items } = await RMM.api(`/api/queue?${params}`);
       window._queueItems = items;
       renderQueue(items);
     } catch (e) {
@@ -158,6 +169,16 @@
   document.getElementById("btn-resume").onclick = () => engine("resume");
   document.getElementById("btn-stop").onclick = () => engine("stop");
   document.getElementById("refresh").onclick = loadQueue;
+
+  const qSearch = document.getElementById("q-search");
+  if (qSearch) {
+    let qTimer = null;
+    qSearch.addEventListener("input", () => {
+      window._queueQ = qSearch.value.trim();
+      clearTimeout(qTimer);
+      qTimer = setTimeout(loadQueue, 350);
+    });
+  }
 
   loadQueue();
   setInterval(loadQueue, 3000);

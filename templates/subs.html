@@ -102,9 +102,13 @@
         });
         tr.querySelector(".b-save").onclick = async () => {
           try {
-            await RMM.api(`/api/subs/${encodeURIComponent(sub)}/config`,
+            const res = await RMM.api(`/api/subs/${encodeURIComponent(sub)}/config`,
               { method: "POST", body: JSON.stringify(readCfg()) });
-            RMM.toast(`Configuratie r/${sub} opgeslagen`);
+            if (res && res.sort_changed) {
+              RMM.toast(`Configuratie r/${sub} opgeslagen — sort gewijzigd, cursor gereset`);
+            } else {
+              RMM.toast(`Configuratie r/${sub} opgeslagen`);
+            }
           } catch (e) { RMM.toast(e.message, "err"); }
         };
         tr.querySelector(".b-sync").onclick = () => doSync(sub, "new", true, "Nieuwe posts in wachtrij + download gestart");

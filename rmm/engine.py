@@ -92,7 +92,7 @@ class Engine:
             if _removed:
                 log.info("%d achtergebleven .part-bestand(en) opgeruimd", _removed)
             self.state = "running"
-            n = max(1, min(int(self.settings.get("concurrency", 2)), 2))
+            n = max(1, min(int(self.settings.get("concurrency", 4)), 16))
             self._tasks = [asyncio.create_task(self._worker(i)) for i in range(n)]
             log.info("Engine gestart met %d workers (max 2)", n)
 
@@ -428,6 +428,7 @@ class Engine:
             return
 
         # 4) Format-conversie op basis van settings
+        orig_dest = dest
         photo_fmt = str(self.settings.get("photo_format") or "jpeg").lower().lstrip(".")
         video_fmt = str(self.settings.get("video_format") or "mp4").lower().lstrip(".")
         gif_mode = str(self.settings.get("gif_mode") or "keep").lower()
@@ -455,11 +456,14 @@ class Engine:
         except Exception as e:  # noqa: BLE001 — conversie mag de download niet verpesten
             log.warning("Onverwacht conversiefout (%s) — behoud origineel: %s", e, dest)
 
-        # Autoritatieve bytes_done = echte bestandsgrootte (post-conversie) van disk.
-        try:
-            final_bytes = os.path.getsize(dest)
-        except OSError:
-            final_bytes = int(size or 0)
+        # bytes_done: de download-grootte uit de stream (size). Na conversie
+        # is de bestandsgrootte op disk de autoritatieve waarde.
+        final_bytes = int(size or 0)
+        if dest != orig_dest:
+            try:
+                final_bytes = os.path.getsize(dest)
+            except OSError:
+                pass
         await self.db.execute(
             "UPDATE downloads SET status = 'done', sha256 = ?, local_path = ?, downloaded_at = ?, "
             "error = NULL, bytes_done = ? WHERE id = ?",

@@ -17,6 +17,7 @@
         <option value="video">Video's</option>
         <option value="gif">GIFs</option>
       </select>
+      <input type="search" id="gal-filter-q" placeholder="Zoek op titel, URL of sub…" style="max-width:260px">
     </div>
     <span id="gal-count" class="small">…</span>
   </div>
@@ -192,9 +193,12 @@ async function loadGallery(reset = false) {
   if (reset) offset = 0;
   const sub = document.getElementById("gal-filter-sub").value;
   const type = document.getElementById("gal-filter-type").value;
+  const qEl = document.getElementById("gal-filter-q");
+  const q = qEl ? qEl.value.trim() : "";
   const params = new URLSearchParams({ limit: PAGE_SIZE, offset });
   if (sub) params.set("sub", sub);
   if (type) params.set("type", type);
+  if (q) params.set("q", q);
 
   try {
     const data = await RMM.api(`/api/media?${params}`);
@@ -398,6 +402,13 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeLightbo
 document.getElementById("gal-loadmore").onclick = () => loadGallery(false);
 document.getElementById("gal-filter-sub").onchange = () => loadGallery(true);
 document.getElementById("gal-filter-type").onchange = () => loadGallery(true);
+{
+  let galQTimer = null;
+  document.getElementById("gal-filter-q").addEventListener("input", () => {
+    clearTimeout(galQTimer);
+    galQTimer = setTimeout(() => loadGallery(true), 350);
+  });
+}
 document.getElementById("gal-delete").onclick = deleteSelected;
 document.getElementById("gal-move").onclick = moveSelected;
 document.getElementById("gal-deselect").onclick = clearSelection;
